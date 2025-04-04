@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sign Agreement</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        #face-guide {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 300px;
+            height: 380px;
+            border: 3px solid rgba(99, 102, 241, 0.7);
+            border-radius: 50% / 60%;
+            pointer-events: none;
+            box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.3);
+        }
+        #video-container {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            margin: 0 auto;
+            background-color: #000;
+            border-radius: 1rem;
+            overflow: hidden;
+        }
+        #guide-text {
+            position: absolute;
+            top: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+        }
+        #video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <!-- Add Terms Overlay -->
+    <div id="termsOverlay" class="fixed inset-0 bg-black bg-opacity-50 z-30 flex items-center justify-center">
+        <div class="bg-white p-6 rounded-lg shadow-lg max-w-md w-full mx-4 text-center">
+            <h2 class="text-xl font-semibold mb-4">Face Verification Terms</h2>
+            <p class="text-gray-600 mb-4">Please review and accept our terms and conditions to proceed with face verification.</p>
+            <button onclick="showTerms()" class="bg-blue-500 text-white px-6 py-3 rounded-lg shadow-lg hover:bg-blue-600 transition-colors">
+                Review Terms & Conditions
+            </button>
+        </div>
+    </div>
+
+    <!-- Add T&C Modal -->
+    <div id="tcModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg max-w-2xl w-full mx-4 p-6">
+            <h3 class="text-xl font-semibold mb-4">Terms & Conditions</h3>
+            <div class="prose max-h-60 overflow-y-auto mb-6">
+                <p class="text-gray-600">By proceeding, you agree to:</p>
+                <ul class="list-disc pl-5 space-y-2 text-gray-600">
+                    <li>Allow camera access for facial verification purposes</li>
+                    <li>The capture and processing of your biometric data for identity verification</li>
+                    <li>The secure storage of your facial template for future verifications</li>
+                    <li>The use of your facial biometrics to sign legal documents</li>
+                </ul>
+                <p class="mt-4 text-gray-600">Your biometric data will be processed securely and in accordance with our privacy policy.</p>
+            </div>
+            <div class="flex justify-end space-x-4">
+                <button onclick="rejectTerms()" class="px-4 py-2 text-gray-600 hover:text-gray-800">
+                    Decline
+                </button>
+                <button onclick="acceptTerms()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                    I Agree
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <nav class="gradient-bg text-white p-4 shadow-lg">
+        <div class="container mx-auto">
+            <h1 class="text-2xl font-bold">Sign Agreement</h1>
+        </div>
+    </nav>
+
+    <div class="container mx-auto px-4 py-8">
+        <div class="bg-white rounded-lg shadow-lg p-6 max-w-4xl mx-auto opacity-50 pointer-events-none" id="mainContent">
+            <div class="text-center mb-8">
+                <h2 class="text-2xl font-semibold text-gray-800">Face Verification</h2>
+                <p class="text-gray-600 mt-2">Please position your face within the guide for verification</p>
+            </div>
+
+            <div class="space-y-6">
+                <div id="video-container" class="shadow-xl">
+                    <video id="video" width="640" height="480" autoplay playsinline class="rounded-lg"></video>
+                    <div id="face-guide"></div>
+                    <div id="guide-text" class="text-sm bg-black bg-opacity-50 text-white px-4 py-2 rounded-full">
+                        Center your face in the oval
+                    </div>
+                </div>
+
+                <div id="status" class="hidden rounded-lg p-4 text-center mt-4"></div>
+
+                <div id="loading" class="hidden text-center">
+                    <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500 mx-auto"></div>
+                    <p class="text-gray-600 mt-2">Processing signature...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="success-section" style="display:none; text-align: center; padding: 20px;">
+        <h2 style="color: green;">✅ Agreement Successfully Signed!</h2>
+        <p>You can close this window now.</p>
+    </div>
+
+    <canvas id="canvas" style="display:none;"></canvas>
+
+    <script>
+        let stream;
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const loadingDiv = document.getElementById('loading');
+        const videoContainer = document.getElementById('video-container');
+        const faceGuide = document.getElementById('face-guide');
+        const guideText = document.getElementById('guide-text');
+        let isCapturing = false;
+        let termsAccepted = false;
+
+        // Initialize secure WebSocket
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/sign`;
+        const socket = new WebSocket(wsUrl);
+
+        socket.onopen = () => {
+            console.log('Secure WebSocket connection established');
+        };
+
+        // T&C handling functions
+        function showTerms() {
+            document.getElementById('tcModal').classList.remove('hidden');
+        }
+
+        function rejectTerms() {
+            document.getElementById('tcModal').classList.add('hidden');
+            setStatus('You must accept the Terms & Conditions to continue', 'error');
+        }
+
+        function acceptTerms() {
+            termsAccepted = true;
+            document.getElementById('tcModal').classList.add('hidden');
+            document.getElementById('termsOverlay').classList.add('hidden');
+            
+            // Enable main content
+            const mainContent = document.getElementById('mainContent');
+            mainContent.classList.remove('opacity-50', 'pointer-events-none');
+            
+            // Clear any existing error message
+            document.getElementById('status').classList.add('hidden');
+            
+            // Initialize camera
+            initializeCamera();
+        }
+
+        // Modified camera initialization
+        async function initializeCamera() {
+            if (!termsAccepted) {
+                showTerms();
+                return;
+            }
+            
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: {
+                        facingMode: 'user',
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    }
+                });
+                video.srcObject = stream;
+                await video.play();
+            } catch (err) {
+                setStatus('Error accessing camera: ' + err.message, 'error');
+            }
+        }
+
+        // Show T&C on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            // Hide the terms modal initially
+            document.getElementById('tcModal').classList.add('hidden');
+            // Terms overlay will be visible by default
+        });
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            // Show success message
+            setStatus('Agreement Successfully Signed! This window will close shortly...', 'success');
+            setTimeout(() => {
+                window.close();
+            }, 1500);
+        }
+
+        function setStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = `rounded-lg p-4 text-center mt-4 ${
+                type === 'error' ? 'bg-red-100 text-red-700' :
+                type === 'success' ? 'bg-green-100 text-green-700' :
+                'bg-blue-100 text-blue-700'
+            }`;
+            statusDiv.textContent = message;
+            statusDiv.classList.remove('hidden');
+        }
+
+        async function validateFacePosition(imageData) {
+            try {
+                const response = await axios.post('/api/validate-face-position', {
+                    image: imageData
+                }, {
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                });
+                
+                const result = response.data;
+                console.log('Face validation response:', result); // Debug log
+                
+                if (result.valid) {
+                    faceGuide.style.borderColor = 'rgba(34, 197, 94, 0.7)'; // Green
+                    guideText.textContent = result.message;
+                } else {
+                    faceGuide.style.borderColor = 'rgba(99, 102, 241, 0.7)'; // Original color
+                    guideText.textContent = result.message;
+                }
+                
+                // If capture flag is true and we're not already capturing
+                if (result.capture && !isCapturing) {
+                    isCapturing = true;  // Set the flag
+                    await captureAndSign();
+                }
+                
+            } catch (error) {
+                console.error('Face validation error:', error);
+                guideText.textContent = 'Error validating face position';
+                faceGuide.style.borderColor = 'rgba(99, 102, 241, 0.7)'; // Original color
+            }
+        }
+
+        async function captureAndSign() {
+            // Disable capture button immediately
+            const captureButton = document.getElementById('captureButton');
+            if (captureButton) {
+                captureButton.disabled = true;
+                captureButton.classList.add('opacity-50', 'cursor-not-allowed');
+            }
+            
+            loadingDiv.classList.remove('hidden');
+            setStatus('Processing signature...', 'processing');
+            
+            try {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                canvas.getContext('2d').drawImage(video, 0, 0);
+                
+                const response = await axios.post('/api/sign', {
+                    agreement_id: '{{ agreement_id }}',
+                    client_id: '{{ client_id }}',
+                    image: canvas.toDataURL('image/jpeg')
+                }, {
+                    headers: {
+                        'X-CSRFToken': '{{ csrf_token() }}',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                });
+                
+                if (response.data.success) {
+                    setStatus(response.data.message, 'success');
+                    stopCamera();
+                    setTimeout(() => {
+                        window.location.href = `/agreement/${response.data.agreement_id}`;
+                    }, 2000);
+                } else {
+                    setStatus(response.data.message || 'Error signing agreement', 'error');
+                    if (captureButton) {
+                        captureButton.disabled = false;
+                        captureButton.classList.remove('opacity-50', 'cursor-not-allowed');
+                    }
+                    isCapturing = false;  // Reset capturing flag on error
+                }
+            } catch (error) {
+                console.error('Signing error:', error);
+                const errorMessage = error.response?.data?.message || 'An error occurred while processing the signature';
+                setStatus('Error: ' + errorMessage, 'error');
+                if (captureButton) {
+                    captureButton.disabled = false;
+                    captureButton.classList.remove('opacity-50', 'cursor-not-allowed');
+                }
+                isCapturing = false;  // Reset capturing flag on error
+            } finally {
+                loadingDiv.classList.add('hidden');
+            }
+        }
+
+        async function handleFirstTimeVerification() {
+            // Capture ID photo
+            const idImage = await captureIDImage();
+            
+            // Capture selfie
+            const selfieImage = await captureSelfie();
+            
+            // Send both for verification
+            const response = await axios.post('/api/verify-identity', {
+                agreement_id: '{{ agreement_id }}',
+                client_id: '{{ client_id }}',
+                id_image: idImage,
+                selfie_image: selfieImage
+            }, {
+                headers: {
+                    'X-CSRFToken': '{{ csrf_token() }}',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            });
+            
+            if (response.data.success) {
+                // Proceed with agreement signing
+                return true;
+            } else {
+                setStatus(response.data.message, 'error');
+                return false;
+            }
+        }
+
+        // Set up axios defaults for CSRF
+        axios.defaults.xsrfCookieName = 'csrf_token';
+        axios.defaults.xsrfHeaderName = 'X-CSRFToken';
+        axios.defaults.withCredentials = true;
+
+        // Face detection interval
+        setInterval(() => {
+            if (!video.srcObject || isCapturing) return;  // Don't validate if capturing
+            
+            // Create temporary canvas for face detection
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = video.videoWidth;
+            tempCanvas.height = video.videoHeight;
+            const ctx = tempCanvas.getContext('2d');
+            ctx.drawImage(video, 0, 0);
+            
+            // Send frame for position validation
+            validateFacePosition(tempCanvas.toDataURL('image/jpeg'));
+        }, 500);
+    </script>
+</body>
+</html>

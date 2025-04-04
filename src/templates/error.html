@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ error_title }} - BioSign</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100">
+    <div class="min-h-screen flex items-center justify-center">
+        <div class="bg-white p-8 rounded-lg shadow-md w-96">
+            <h1 class="text-2xl font-bold mb-6 text-center text-red-600">{{ error_title }}</h1>
+            <p class="text-gray-700 text-center mb-4">{{ error_message }}</p>
+            {% if retry_after %}
+            <p class="text-sm text-gray-500 text-center">Please try again in {{ retry_after }} seconds</p>
+            {% endif %}
+            <div class="mt-6 text-center">
+                <a href="javascript:history.back()" 
+                   class="text-blue-500 hover:text-blue-600">Go Back</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html> 

@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Identity Verification</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        #face-guide {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 300px;
+            height: 380px;
+            border: 3px solid rgba(99, 102, 241, 0.7);
+            border-radius: 50% / 60%;
+            pointer-events: none;
+            box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.3);
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <!-- Add Terms Overlay -->
+    <div id="termsOverlay" class="fixed inset-0 bg-black bg-opacity-50 z-30 flex items-center justify-center">
+        <div class="bg-white p-6 rounded-lg shadow-lg max-w-md w-full mx-4 text-center">
+            <h2 class="text-xl font-semibold mb-4">Identity Verification Terms</h2>
+            <p class="text-gray-600 mb-4">Please review and accept our terms and conditions to proceed with identity verification.</p>
+            <button onclick="showTerms()" class="bg-blue-500 text-white px-6 py-3 rounded-lg shadow-lg hover:bg-blue-600 transition-colors">
+                Review Terms & Conditions
+            </button>
+        </div>
+    </div>
+
+    <!-- Add T&C Modal -->
+    <div id="tcModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg max-w-2xl w-full mx-4 p-6">
+            <h3 class="text-xl font-semibold mb-4">Terms & Conditions</h3>
+            <div class="prose max-h-60 overflow-y-auto mb-6">
+                <p class="text-gray-600">By proceeding, you agree to:</p>
+                <ul class="list-disc pl-5 space-y-2 text-gray-600">
+                    <li>Allow camera access for facial verification purposes</li>
+                    <li>The capture and processing of your biometric data for identity verification</li>
+                    <li>The secure storage of your facial template for future verifications</li>
+                    <li>The use of your facial biometrics to sign legal documents</li>
+                </ul>
+                <p class="mt-4 text-gray-600">Your biometric data will be processed securely and in accordance with our privacy policy.</p>
+                <p class="mt-4 text-gray-600"><strong>Note:</strong> We do not store your government ID or ID photo. These are only used temporarily for verification purposes and are immediately discarded after the verification process is complete.</p>
+            </div>
+            <div class="flex justify-end space-x-4">
+                <button onclick="rejectTerms()" class="px-4 py-2 text-gray-600 hover:text-gray-800">
+                    Decline
+                </button>
+                <button onclick="acceptTerms()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                    I Agree
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <nav class="gradient-bg text-white p-4 shadow-lg">
+        <div class="container mx-auto">
+            <h1 class="text-2xl font-bold">Identity Verification</h1>
+        </div>
+    </nav>
+
+    <div class="container mx-auto px-4 py-8">
+        <div class="max-w-4xl mx-auto space-y-8">
+            <!-- Step 1: ID Upload -->
+            <div id="idStep" class="bg-white rounded-lg shadow-lg p-6 opacity-50 pointer-events-none">
+                <h2 class="text-xl font-semibold mb-4">Step 1: Government ID Upload</h2>
+                <p class="text-gray-600 mb-4">Please upload a clear photo of your government-issued ID</p>
+                <input type="file" id="idInput" accept="image/*" capture="environment" class="hidden">
+                <button onclick="captureID()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                    Take ID Photo
+                </button>
+                <div id="idPreview" class="mt-4 hidden">
+                    <div class="flex justify-center space-x-4">
+                        <div class="w-1/2">
+                            <h3 class="text-lg font-semibold mb-2">Original ID</h3>
+                            <img id="idImage" class="max-w-full rounded-lg shadow">
+                        </div>
+                        <div class="w-1/2">
+                            <h3 class="text-lg font-semibold mb-2">Extracted Face</h3>
+                            <img id="extractedFace" class="max-w-full rounded-lg shadow">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 2: Selfie -->
+            <div id="selfieStep" class="bg-white rounded-lg shadow-lg p-6 hidden opacity-50 pointer-events-none">
+                <h2 class="text-xl font-semibold mb-4">Step 2: Take a Selfie</h2>
+                <p class="text-gray-600 mb-4">Please center your face in the guide and hold still</p>
+                <div id="video-container" class="relative w-full max-w-2xl mx-auto">
+                    <div id="status" class="hidden absolute top-4 left-1/2 transform -translate-x-1/2 z-10 w-full max-w-md text-center"></div>
+                    <video id="video" width="640" height="480" autoplay playsinline class="rounded-lg"></video>
+                    <div id="face-guide"></div>
+                </div>
+            </div>
+
+            <div id="status" class="hidden rounded-lg p-4 text-center"></div>
+        </div>
+    </div>
+
+    <canvas id="canvas" style="display:none;"></canvas>
+
+    <script>
+        let videoStream;
+        let idImage = null;
+        let selfieImage = null;
+        let isCapturing = false;
+        let captureButton;
+        let termsAccepted = false;
+        
+        // Add CSRF token setup for axios
+        const token = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+        axios.defaults.headers.common['X-CSRF-TOKEN'] = token;
+        
+        function setStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `mt-4 p-2 rounded ${type === 'error' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`;
+        }
+
+        async function validateFacePosition(imageData) {
+            try {
+                const response = await axios.post('/api/validate-face-position', {
+                    image: imageData
+                });
+                return response.data;
+            } catch (error) {
+                console.error('Face validation error:', error);
+                return { valid: false, message: 'Error validating face position', capture: false };
+            }
+        }
+
+        async function startFaceValidation(videoElement, onCapture) {
+            if (isCapturing) return;
+            isCapturing = true;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = videoElement.videoWidth;
+            canvas.height = videoElement.videoHeight;
+            const ctx = canvas.getContext('2d');
+
+            const validationInterval = setInterval(async () => {
+                if (!isCapturing) {
+                    clearInterval(validationInterval);
+                    return;
+                }
+
+                ctx.drawImage(videoElement, 0, 0);
+                const imageData = canvas.toDataURL('image/jpeg');
+                
+                const result = await validateFacePosition(imageData);
+                setStatus(result.message, result.valid ? 'success' : 'error');
+
+                if (result.capture) {
+                    clearInterval(validationInterval);
+                    isCapturing = false;
+                    onCapture(imageData);
+                }
+            }, 500);
+        }
+
+        function showTerms() {
+            document.getElementById('tcModal').classList.remove('hidden');
+            document.getElementById('termsOverlay').classList.add('hidden');
+        }
+
+        function rejectTerms() {
+            document.getElementById('tcModal').classList.add('hidden');
+            document.getElementById('termsOverlay').classList.remove('hidden');
+            setStatus('You must accept the Terms & Conditions to continue', 'error');
+        }
+
+        function acceptTerms() {
+            termsAccepted = true;
+            document.getElementById('tcModal').classList.add('hidden');
+            document.getElementById('termsOverlay').classList.add('hidden');
+            
+            // Enable ID and selfie steps
+            const idStep = document.getElementById('idStep');
+            const selfieStep = document.getElementById('selfieStep');
+            
+            idStep.classList.remove('opacity-50', 'pointer-events-none');
+            selfieStep.classList.remove('opacity-50', 'pointer-events-none');
+            
+            setStatus('Terms accepted. You may now proceed with verification.', 'success');
+        }
+
+        function captureID() {
+            if (!termsAccepted) {
+                setStatus('Please accept the Terms & Conditions first', 'error');
+                showTerms();
+                return;
+            }
+            const input = document.getElementById('idInput');
+            input.click();
+        }
+
+        async function initializeCamera() {
+            try {
+                const video = document.getElementById('video');
+                videoStream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'user',
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    }
+                });
+                video.srcObject = videoStream;
+                await video.play();
+            } catch (error) {
+                console.error('Error accessing camera:', error);
+                setStatus('Error accessing camera. Please ensure camera permissions are granted.', 'error');
+            }
+        }
+
+        async function startSelfieCapture() {
+            if (!termsAccepted) {
+                setStatus('Please accept the Terms & Conditions first', 'error');
+                showTerms();
+                return;
+            }
+            
+            await initializeCamera();
+            const video = document.getElementById('video');
+            document.getElementById('selfieStep').classList.remove('hidden');
+            startFaceValidation(video, async (imageData) => {
+                selfieImage = imageData;
+                
+                try {
+                    const response = await axios.post('/api/verify-identity', {
+                        agreement_id: '{{ agreement_id }}',
+                        client_id: '{{ client_id }}',
+                        id_image: idImage,
+                        selfie_image: selfieImage
+                    }, {
+                        headers: {
+                            'X-CSRFToken': '{{ csrf_token() }}',
+                            'X-Requested-With': 'XMLHttpRequest'
+                        }
+                    });
+
+                    if (response.data.success) {
+                        setStatus('Identity verified! Redirecting to signing page...', 'success');
+                        // Stop the video stream before redirecting
+                        if (videoStream) {
+                            videoStream.getTracks().forEach(track => track.stop());
+                        }
+                        // Redirect to sign page after a short delay to show the success message
+                        setTimeout(() => {
+                            window.location.href = `/sign/${response.data.agreement_id}`;
+                        }, 1500);
+                    } else {
+                        setStatus(response.data.message, 'error');
+                        // Restart capture if verification fails
+                        startSelfieCapture();
+                    }
+                } catch (error) {
+                    setStatus('Error verifying identity', 'error');
+                    // Restart capture on error
+                    startSelfieCapture();
+                }
+            });
+        }
+
+        // Modify the ID upload handler
+        document.getElementById('idInput').addEventListener('change', async function(e) {
+            if (!termsAccepted) {
+                setStatus('Please accept the Terms & Conditions first', 'error');
+                showTerms();
+                return;
+            }
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = async function(e) {
+                    idImage = e.target.result;
+                    document.getElementById('idImage').src = idImage;
+                    
+                    try {
+                        const response = await axios.post('/api/extract-face', {
+                            image: idImage
+                        }, {
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-Requested-With': 'XMLHttpRequest'
+                            }
+                        });
+                        
+                        if (response.data.success) {
+                            document.getElementById('extractedFace').src = response.data.face;
+                            document.getElementById('idPreview').classList.remove('hidden');
+                            setStatus('ID photo uploaded successfully. Please proceed with selfie.', 'success');
+                            document.getElementById('selfieStep').classList.remove('hidden');
+                            // Initialize camera after successful ID upload
+                            await startSelfieCapture();
+                        } else {
+                            setStatus('Failed to detect face in ID: ' + response.data.message, 'error');
+                        }
+                    } catch (error) {
+                        setStatus('Error processing ID photo: ' + error.message, 'error');
+                    }
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Replace the DOMContentLoaded event handler
+        document.addEventListener('DOMContentLoaded', function() {
+            // Hide the terms modal initially
+            document.getElementById('tcModal').classList.add('hidden');
+        });
+    </script>
+</body>
+</html> 

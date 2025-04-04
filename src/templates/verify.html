@@ -1,0 +1,554 @@
+{% extends "base.html" %}
+
+{% block title %}Verify Agreement{% endblock %}
+
+{% block head %}
+<style>
+.modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 50;
+    overflow-y: auto;
+}
+
+.verification-badge {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.7; transform: scale(1.05); }
+    100% { opacity: 1; transform: scale(1); }
+}
+
+.hash-verify {
+    font-family: 'Monaco', 'Consolas', monospace;
+    word-break: break-all;
+    background: #f8fafc;
+    padding: 0.5rem;
+    border-radius: 0.375rem;
+    border: 1px solid #e2e8f0;
+    font-size: 0.75rem;
+    line-height: 1.25;
+}
+
+.verification-step {
+    transition: all 0.3s ease;
+}
+
+.verification-step.verified {
+    background-color: #f0fdf4;
+    border-color: #86efac;
+}
+
+.verification-step.failed {
+    background-color: #fef2f2;
+    border-color: #fecaca;
+}
+
+.block-card {
+    transition: all 0.3s ease;
+}
+
+.block-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.audit-entry {
+    position: relative;
+}
+
+.audit-entry::before {
+    content: '';
+    position: absolute;
+    left: -1.5rem;
+    top: 0;
+    height: 100%;
+    width: 2px;
+    background: #6366f1;
+    opacity: 0.3;
+}
+
+.audit-entry:last-child::before {
+    height: 50%;
+}
+
+.list-circle {
+    list-style-type: circle;
+}
+</style>
+{% endblock %}
+
+{% block nav_title %}Agreement Verification{% endblock %}
+
+{% block content %}
+<div class="bg-white rounded-lg shadow-lg p-6 max-w-2xl mx-auto">
+    <div class="flex items-center justify-between mb-6">
+        <h2 class="text-2xl font-semibold text-gray-800">Verify Agreement</h2>
+        <button onclick="toggleVerificationInfo()" class="text-gray-500 hover:text-gray-700">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+        </button>
+    </div>
+
+    <!-- Verification Info Panel -->
+    <div id="verificationInfo" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center overflow-hidden">
+        <div class="bg-white rounded-lg w-full max-w-2xl mx-4 flex flex-col" style="max-height: 90vh;">
+            <!-- Header -->
+            <div class="p-6 border-b border-gray-200 flex justify-between items-center">
+                <h3 class="text-xl font-bold">Agreement Verification Process</h3>
+                <button onclick="toggleVerificationInfo()" class="text-gray-500 hover:text-gray-700">
+                    <span class="text-2xl">×</span>
+                </button>
+            </div>
+            
+            <!-- Content -->
+            <div class="p-6 overflow-y-auto flex-grow space-y-6">
+                <section class="bg-gradient-to-r from-blue-50 to-transparent p-4 rounded-lg">
+                    <h4 class="font-semibold text-lg mb-3 text-blue-800">1. Blockchain Integrity</h4>
+                    <ul class="list-disc pl-5 space-y-2 text-gray-600">
+                        <li>Verifies block hashes and chain continuity</li>
+                        <li>Validates proof of work (mining difficulty)</li>
+                        <li>Checks transaction timestamps and sequence</li>
+                        <li>Ensures block structure integrity</li>
+                    </ul>
+                </section>
+
+                <section class="bg-gradient-to-r from-green-50 to-transparent p-4 rounded-lg">
+                    <h4 class="font-semibold text-lg mb-3 text-green-800">2. Database Consistency</h4>
+                    <ul class="list-disc pl-5 space-y-2 text-gray-600">
+                        <li>Matches blockchain transactions with database records</li>
+                        <li>Verifies recipient email consistency</li>
+                        <li>Validates agreement status (pending/signed)</li>
+                        <li>Cross-references transaction timestamps</li>
+                    </ul>
+                </section>
+
+                <section class="bg-gradient-to-r from-purple-50 to-transparent p-4 rounded-lg">
+                    <h4 class="font-semibold text-lg mb-3 text-purple-800">3. Audit Trail Verification</h4>
+                    <ul class="list-disc pl-5 space-y-2 text-gray-600">
+                        <li>Ensures each blockchain transaction has matching audit logs</li>
+                        <li>Validates action types (creation, signature, cancellation)</li>
+                        <li>Verifies actor identities and timestamps</li>
+                        <li>Checks IP addresses and metadata integrity</li>
+                    </ul>
+                </section>
+
+                <div class="bg-white p-4 rounded-lg border border-red-100">
+                    <h5 class="font-semibold text-red-700 mb-2">Tampering Detection</h5>
+                    <ul class="list-circle pl-5 space-y-1 text-gray-600">
+                        <li>Invalid block hashes or broken chain</li>
+                        <li>Mismatched database records</li>
+                        <li>Missing or inconsistent audit logs</li>
+                        <li>Timestamp manipulation</li>
+                        <li>Status or email discrepancies</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="space-y-6">
+        <div class="verification-form">
+            <input type="email" 
+                   id="email" 
+                   placeholder="Enter your email" 
+                   class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            >
+            <button onclick="verifyAgreements()" 
+                    class="mt-4 w-full bg-indigo-600 text-white py-2 px-4 rounded-lg hover:bg-indigo-700 transition duration-200">
+                Verify Agreements
+            </button>
+        </div>
+
+        <div id="agreements-list" class="hidden space-y-4"></div>
+        <div id="error-message" class="hidden text-red-600 text-center"></div>
+    </div>
+</div>
+
+<!-- Blockchain Verification Modal -->
+<div id="verificationModal" class="modal">
+    <div class="bg-white w-11/12 max-w-4xl mx-auto my-8 rounded-lg shadow-xl">
+        <div class="p-6 border-b border-gray-200">
+            <div class="flex justify-between items-center">
+                <h3 class="text-2xl font-bold text-gray-800">Blockchain Verification</h3>
+                <button onclick="closeVerificationModal()" class="text-gray-500 hover:text-gray-700">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+        
+        <div class="p-6 space-y-8">
+            <!-- Verification Steps -->
+            <div id="verificationSteps" class="space-y-4">
+                <!-- Steps will be populated dynamically -->
+            </div>
+
+            <!-- Blockchain Evolution -->
+            <div class="mt-8">
+                <h4 class="text-xl font-semibold mb-4 text-gray-800">Blockchain Evolution</h4>
+                <div id="blockchainEvolution" class="space-y-4">
+                    <!-- Blocks will be populated dynamically -->
+                </div>
+            </div>
+
+            <!-- Audit Trail -->
+            <div class="mt-8">
+                <h4 class="text-xl font-semibold mb-4 text-gray-800">Audit Trail</h4>
+                <div id="auditTrail" class="space-y-4 pl-6">
+                    <!-- Audit logs will be populated dynamically -->
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function verifyAgreements() {
+    const email = document.getElementById('email').value.trim();
+    const errorDiv = document.getElementById('error-message');
+    const agreementsList = document.getElementById('agreements-list');
+    
+    if (!email) {
+        errorDiv.textContent = 'Please enter an email address';
+        errorDiv.classList.remove('hidden');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/verify/agreements', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ email })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            agreementsList.innerHTML = '';
+            data.agreements.forEach(agreement => {
+                agreementsList.innerHTML += `
+                    <div class="border border-gray-200 rounded-lg p-4">
+                        <h3 class="font-semibold">${agreement.title}</h3>
+                        <p class="text-sm text-gray-600">Status: ${agreement.status}</p>
+                        <p class="text-sm text-gray-600">Created: ${new Date(agreement.created_at).toLocaleDateString()}</p>
+                        <button onclick="viewBlockchainDetails('${agreement.id}')" 
+                                class="mt-2 text-indigo-600 hover:text-indigo-800">
+                            View Blockchain Details
+                        </button>
+                    </div>
+                `;
+            });
+            agreementsList.classList.remove('hidden');
+            errorDiv.classList.add('hidden');
+        } else {
+            throw new Error(data.message);
+        }
+    } catch (error) {
+        errorDiv.textContent = error.message || 'Error verifying agreements';
+        errorDiv.classList.remove('hidden');
+        agreementsList.classList.add('hidden');
+    }
+}
+
+async function viewBlockchainDetails(agreementId) {
+    try {
+        const modal = document.getElementById('verificationModal');
+        const stepsContainer = document.getElementById('verificationSteps');
+        modal.style.display = 'block';
+        
+        // Initialize verification steps
+        stepsContainer.innerHTML = `
+            <div class="verification-step border rounded-lg p-4">
+                <div class="flex items-center">
+                    <div class="verification-badge animate-pulse bg-yellow-100 p-2 rounded-full mr-4">⏳</div>
+                    <div>
+                        <h4 class="font-semibold">Verifying Agreement Integrity...</h4>
+                        <p class="text-sm text-gray-600">Checking blockchain records</p>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const response = await fetch(`/api/verify/blockchain/${agreementId}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            // Update verification steps with results
+            stepsContainer.innerHTML = generateVerificationSteps(data.verification);
+            
+            // Update blockchain evolution
+            document.getElementById('blockchainEvolution').innerHTML = 
+                generateBlockchainEvolution(data.blockchain_evolution);
+            
+            // Update audit trail
+            document.getElementById('auditTrail').innerHTML = 
+                generateAuditTrail(data.audit_trail);
+        } else {
+            throw new Error(data.message);
+        }
+    } catch (error) {
+        document.getElementById('verificationSteps').innerHTML = `
+            <div class="verification-step failed border rounded-lg p-4">
+                <div class="flex items-center">
+                    <div class="bg-red-100 p-2 rounded-full mr-4">❌</div>
+                    <div>
+                        <h4 class="font-semibold">Verification Failed</h4>
+                        <p class="text-sm text-red-600">${error.message}</p>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+}
+
+function closeVerificationModal() {
+    document.getElementById('verificationModal').style.display = 'none';
+}
+
+function generateVerificationSteps(verification) {
+    const isValid = verification.is_valid;
+    const blockNumber = verification.block_number || 'Not Found';
+    
+    // Define consistent icons and colors
+    const icons = {
+        success: '<svg class="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>',
+        failure: '<svg class="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>',
+        database: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>',
+        blockchain: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>',
+        transaction: '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>'
+    };
+    
+    const colors = {
+        success: {
+            bg: 'bg-green-50',
+            border: 'border-green-200',
+            text: 'text-green-700',
+            title: 'text-green-800'
+        },
+        failure: {
+            bg: 'bg-red-50',
+            border: 'border-red-200',
+            text: 'text-red-700',
+            title: 'text-red-800'
+        }
+    };
+
+    let html = `
+        <div class="space-y-4">
+            <div class="verification-step border rounded-lg p-4 ${isValid ? colors.success.bg : colors.failure.bg} ${isValid ? colors.success.border : colors.failure.border}">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div class="p-2 rounded-full">
+                            ${isValid ? icons.success : icons.failure}
+                        </div>
+                        <div>
+                            <h4 class="font-semibold ${isValid ? colors.success.title : colors.failure.title}">
+                                ${isValid ? 'Verification Successful' : 'Verification Failed'}
+                            </h4>
+                        </div>
+                    </div>
+                    <div class="text-sm text-gray-500">
+                        ${verification.timestamp ? new Date(verification.timestamp * 1000).toLocaleString() : 'N/A'}
+                    </div>
+                </div>
+            </div>
+
+            <div class="space-y-3">
+    `;
+    
+    verification.details.forEach(detail => {
+        let stepIcon, title;
+        
+        switch(detail.type) {
+            case 'block_verification':
+                stepIcon = icons.blockchain;
+                title = 'Block Verification';
+                break;
+            case 'database_verification':
+                stepIcon = icons.database;
+                title = 'Database Verification';
+                break;
+            case 'transaction_verification':
+                stepIcon = icons.transaction;
+                title = 'Transaction Verification';
+                break;
+            default:
+                stepIcon = icons.database;
+                title = 'Verification Step';
+        }
+        
+        // For block verification, always show the hashes
+        if (detail.type === 'block_verification') {
+            const colorScheme = detail.hash_valid && detail.chain_valid ? colors.success : colors.failure;
+            html += `
+                <div class="verification-step border rounded-lg p-4 ${colorScheme.bg} ${colorScheme.border}">
+                    <div class="flex flex-col space-y-2">
+                        <div class="flex items-center justify-between">
+                            <h4 class="font-semibold ${colorScheme.title}">${title}</h4>
+                            <div class="text-sm text-gray-500">
+                                ${new Date(detail.timestamp * 1000).toLocaleString()}
+                            </div>
+                        </div>
+                        <div class="bg-white p-3 rounded-lg space-y-2">
+                            <div class="text-sm">
+                                <span class="font-medium">Computed Hash:</span>
+                                <code class="ml-2 font-mono bg-gray-100 px-2 py-1 rounded">${formatHash(detail.computed_hash, 16)}</code>
+                            </div>
+                            <div class="text-sm">
+                                <span class="font-medium">Stored Hash:</span>
+                                <code class="ml-2 font-mono bg-gray-100 px-2 py-1 rounded">${formatHash(detail.stored_hash, 16)}</code>
+                            </div>
+                        </div>
+                        <p class="text-sm ${colorScheme.text}">${detail.message}</p>
+                    </div>
+                </div>
+            `;
+        } else {
+            // For other verification types
+            const isDetailValid = detail.valid === true;
+            const colorScheme = isDetailValid ? colors.success : colors.failure;
+            const statusIcon = isDetailValid ? icons.success : icons.failure;
+            
+            html += `
+                <div class="verification-step border rounded-lg p-4 ${colorScheme.bg} ${colorScheme.border}">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center space-x-3">
+                            <div class="p-2 rounded-full">
+                                ${statusIcon}
+                            </div>
+                            <div>
+                                <h4 class="font-semibold ${colorScheme.title}">${title}</h4>
+                                <p class="text-sm ${colorScheme.text}">${detail.message}</p>
+                            </div>
+                        </div>
+                        <div class="text-sm text-gray-500">
+                            ${new Date(detail.timestamp * 1000).toLocaleString()}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+    });
+    
+    html += `
+            </div>
+        </div>
+    `;
+    
+    return html;
+}
+
+function generateBlockchainEvolution(blocks) {
+    if (!blocks || blocks.length === 0) {
+        return '<p class="text-gray-500">No blockchain data available</p>';
+    }
+    
+    return blocks.map(block => {
+        // Ensure timestamp is a valid number
+        let blockTimestamp = 'Unknown date';
+        if (block.timestamp) {
+            const timestamp = typeof block.timestamp === 'string' 
+                ? parseFloat(block.timestamp) 
+                : block.timestamp;
+                
+            if (!isNaN(timestamp)) {
+                blockTimestamp = new Date(timestamp * 1000).toLocaleString();
+            }
+        }
+        
+        // Ensure transaction timestamp is valid
+        let txTimestamp = 'Unknown date';
+        if (block.transaction && block.transaction.timestamp) {
+            const timestamp = typeof block.transaction.timestamp === 'string' 
+                ? parseFloat(block.transaction.timestamp) 
+                : block.transaction.timestamp;
+                
+            if (!isNaN(timestamp)) {
+                txTimestamp = new Date(timestamp * 1000).toLocaleString();
+            }
+        }
+        
+        return `
+            <div class="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <h5 class="font-semibold text-gray-800">Block #${block.index}</h5>
+                        <p class="text-xs text-gray-500 mt-1">Hash: ${block.hash.substring(0, 20)}...</p>
+                    </div>
+                    <p class="text-xs text-gray-500">${blockTimestamp}</p>
+                </div>
+                <div class="mt-4">
+                    <p class="text-sm text-gray-600">
+                        Transaction Type: ${block.transaction.type || 'Creation'}
+                    </p>
+                    <p class="text-xs text-gray-500 mt-1">
+                        Timestamp: ${txTimestamp}
+                    </p>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function generateAuditTrail(logs) {
+    if (!logs || logs.length === 0) {
+        return '<p class="text-gray-500">No audit logs available</p>';
+    }
+    
+    return logs.map(log => {
+        // Ensure timestamp is a valid date
+        let formattedTimestamp = 'Unknown date';
+        if (log.timestamp) {
+            try {
+                formattedTimestamp = new Date(log.timestamp).toLocaleString();
+            } catch (e) {
+                console.error("Invalid timestamp format:", log.timestamp);
+            }
+        }
+        
+        return `
+            <div class="audit-entry py-4">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="font-medium text-gray-800">${log.action_type.replace('_', ' ').toUpperCase()}</p>
+                        <p class="text-sm text-gray-600">By: ${log.actor_email || 'Unknown'}</p>
+                    </div>
+                    <p class="text-xs text-gray-500">${formattedTimestamp}</p>
+                </div>
+                ${log.metadata ? `
+                    <div class="mt-3 p-3 bg-gray-50 rounded-lg">
+                        ${Object.entries(log.metadata).map(([key, value]) => 
+                            `<p class="text-sm"><span class="font-medium">${key}:</span> ${value}</p>`
+                        ).join('')}
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }).join('');
+}
+
+function toggleVerificationInfo() {
+    const infoPanel = document.getElementById('verificationInfo');
+    infoPanel.classList.toggle('hidden');
+}
+
+function formatHash(hash, length = 8) {
+    if (!hash) return 'N/A';
+    return `${hash.substring(0, length)}...${hash.substring(hash.length - length)}`;
+}
+</script>
+{% endblock %} 

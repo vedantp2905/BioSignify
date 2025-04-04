@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>BioSign - Cancelled Agreements</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        <a href="/" class="text-blue-600 hover:text-blue-800 mb-8 inline-block">← Back to Home</a>
+        
+        <h1 class="text-4xl font-bold text-gray-800 mb-8">Cancelled Agreements</h1>
+        
+        <div class="bg-white rounded-lg shadow-lg p-6">
+            <div id="agreements-list" class="space-y-4">
+                <!-- Agreements will be populated here via JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: 'numeric',
+                hour12: true
+            });
+        }
+
+        fetch('/api/cancelled-agreements')
+            .then(response => response.json())
+            .then(data => {
+                const agreementsList = document.getElementById('agreements-list');
+                data.agreements.forEach(agreement => {
+                    agreementsList.innerHTML += `
+                        <div class="border-b border-gray-200 pb-4">
+                            <div class="flex justify-between items-center">
+                                <div>
+                                    <h3 class="text-lg font-semibold">${agreement.title}</h3>
+                                    <p class="text-gray-600">Recipient: ${agreement.recipient_email}</p>
+                                    <p class="text-gray-600">Created: ${formatDate(agreement.created_at)}</p>
+                                </div>
+                                <a href="/agreement/${agreement.id}" 
+                                   class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600">
+                                    View Details
+                                </a>
+                            </div>
+                        </div>
+                    `;
+                });
+            })
+            .catch(error => {
+                console.error('Error fetching agreements:', error);
+                document.getElementById('agreements-list').innerHTML = `
+                    <div class="text-red-600">Error loading agreements. Please try again later.</div>
+                `;
+            });
+    </script>
+</body>
+</html> 

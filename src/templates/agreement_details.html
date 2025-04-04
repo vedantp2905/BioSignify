@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>BioSign - Agreement Details</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <a href="/pending-agreements" class="text-blue-600 hover:text-blue-800 mb-8 inline-block">← Back to Agreements</a>
+        
+        <div class="bg-white rounded-lg shadow-lg p-8">
+            <h1 class="text-3xl font-bold text-gray-800 mb-6">Agreement Details</h1>
+            
+            <div class="space-y-6">
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-700">Title</h2>
+                    <p class="text-gray-800 mt-1">{{ agreement.title }}</p>
+                </div>
+
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-700">Recipient</h2>
+                    <p class="text-gray-800 mt-1">{{ agreement.recipient_email }}</p>
+                </div>
+
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-700">Status</h2>
+                    <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium 
+                        {% if agreement.status == 'pending' %}
+                            bg-yellow-100 text-yellow-800
+                        {% elif agreement.status == 'signed' %}
+                            bg-green-100 text-green-800
+                        {% else %}
+                            bg-gray-100 text-gray-800
+                        {% endif %}">
+                        {{ agreement.status|title }}
+                    </span>
+                </div>
+
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-700">Created At</h2>
+                    <p class="text-gray-800 mt-1">{{ agreement.created_at.strftime('%B %d, %Y %I:%M %p') }}</p>
+                </div>
+
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-700">Content</h2>
+                    <div class="mt-2 p-4 bg-gray-50 rounded-lg whitespace-pre-wrap">{{ agreement.content }}</div>
+                </div>
+
+                {% if agreement.status == 'pending' %}
+                <div class="flex justify-end mt-8">
+                    {% if agreement.recipient_email == current_user %}
+                    <a href="/sign/{{ agreement.agreement_id }}" 
+                       class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors">
+                        Sign Agreement
+                    </a>
+                    {% else %}
+                    <button onclick="cancelAgreement('{{ agreement.agreement_id }}', '{{ agreement.recipient_email }}')"
+                            class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">
+                        Cancel Agreement
+                    </button>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="bg-white rounded-lg shadow-lg p-8 mt-8">
+            <h2 class="text-2xl font-bold text-gray-800 mb-6">Audit Trail</h2>
+            <div id="audit-logs-container" class="divide-y">
+                <!-- Audit logs will be populated here -->
+            </div>
+        </div>
+    </div>
+
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <script>
+    function cancelAgreement(agreementId, clientId) {
+        if (!confirm('Are you sure you want to cancel this agreement?')) {
+            return;
+        }
+
+        fetch(`/api/cancel-agreement/${agreementId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': document.querySelector('input[name="csrf_token"]').value
+            },
+            body: JSON.stringify({ 
+                client_id: clientId  // Include the clientId in the request body
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                alert('Error: ' + data.error);
+            } else {
+                alert('Agreement cancelled successfully');
+                window.location.href = '/cancelled-agreements';
+            }
+        })
+        .catch(error => {
+            alert('Error cancelling agreement: ' + error.message);
+        });
+    }
+
+    function formatDate(dateString) {
+        const date = new Date(dateString);
+        return date.toLocaleString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: 'numeric',
+            hour12: true
+        });
+    }
+
+    // Load audit logs on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        loadAuditLogs();
+    });
+
+    async function loadAuditLogs() {
+        const container = document.getElementById('audit-logs-container');
+        container.innerHTML = '<div class="p-4 text-center">Loading audit logs...</div>';
+
+        try {
+            const response = await fetch(`/api/agreements/{{ agreement.agreement_id }}/audit-logs`);
+            const auditLogs = await response.json();
+            
+            if (auditLogs.length === 0) {
+                container.innerHTML = '<div class="p-4 text-center text-gray-500">No audit logs found</div>';
+                return;
+            }
+
+            container.innerHTML = auditLogs.map(log => {
+                const icon = getActionIcon(log.action_type);
+                const timestamp = formatDate(log.timestamp);
+                let metadataHtml = '';
+
+                if (log.metadata) {
+                    if (log.action_type === 'verification_attempt') {
+                        const score = log.metadata.similarity_score?.toFixed(2);
+                        const success = log.metadata.success.toLowerCase() === 'true';
+                        const firstTime = log.metadata.first_time === true;
+                        metadataHtml = `
+                            <div class="mt-2 text-sm text-gray-500">
+                                Similarity Score: ${score}
+                                <span class="ml-2 ${success ? 'text-green-500' : 'text-red-500'}">
+                                    ${success ? '✓ Verified' : '✗ Failed'}
+                                </span>
+                                ${firstTime ? '<span class="ml-2">(First-time verification)</span>' : ''}
+                            </div>
+                        `;
+                    } else if (log.action_type === 'signed') {
+                        metadataHtml = `
+                            <div class="mt-2 text-sm text-gray-500">
+                                Verification Method: ${log.metadata.verification_method || 'N/A'}
+                                ${log.metadata.similarity_score ? 
+                                    `<br>Similarity Score: ${parseFloat(log.metadata.similarity_score).toFixed(2)}` : 
+                                    ''}
+                                <span class="text-green-500 ml-2">✓ Verified</span>
+                            </div>
+                        `;
+                    } else if (log.action_type === 'error') {
+                        metadataHtml = `
+                            <div class="mt-2 text-sm text-red-500">
+                                Error Type: ${log.metadata.error_type || 'Unknown'}
+                                <br>Message: ${log.metadata.error_message || 'No details available'}
+                            </div>
+                        `;
+                    } else if (Object.keys(log.metadata).length > 0) {
+                        metadataHtml = `
+                            <div class="mt-2 text-sm text-gray-500">
+                                ${Object.entries(log.metadata)
+                                    .filter(([key]) => key !== 'timestamp')
+                                    .map(([key, value]) => `
+                                        <div>${key.replace('_', ' ').charAt(0).toUpperCase() + key.slice(1)}: ${value}</div>
+                                    `).join('')}
+                            </div>
+                        `;
+                    }
+                }
+
+                return `
+                    <div class="p-4 hover:bg-gray-50">
+                        <div class="flex items-start">
+                            <span class="text-2xl mr-3">${icon}</span>
+                            <div class="flex-1">
+                                <div class="flex justify-between">
+                                    <span class="font-medium capitalize">
+                                        ${log.action_type.replace('_', ' ')}
+                                    </span>
+                                    <span class="text-gray-500 text-sm">
+                                        ${timestamp}
+                                    </span>
+                                </div>
+                                <div class="text-sm text-gray-600">
+                                    By: ${log.actor_email}
+                                </div>
+                                ${metadataHtml}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+        } catch (error) {
+            console.error('Error loading audit logs:', error);
+            container.innerHTML = '<div class="p-4 text-center text-red-500">Error loading audit logs</div>';
+        }
+    }
+
+    function getActionIcon(actionType) {
+        const icons = {
+            'created': '📄',
+            'signed': '✍️',
+            'cancelled': '❌',
+            'verification_attempt': '🔍',
+            'error': '⚠️'
+        };
+        return icons[actionType] || '📝';
+    }
+    </script>
+</body>
+</html> 

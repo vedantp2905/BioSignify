@@ -1,6 +1,5 @@
 mtcnn==1.0.0
 keras-facenet==0.3.2
-tensorflow == 2.18.0
 keras==3.8.0
 opencv-python==4.11.0.86
 numpy==2.0.2

@@ -1,0 +1,6 @@
+.env
+venv/
+src/__pychache__
+src/utils/__pycache__
+src/database/__pycache__/
+src/__pycache__/

@@ -1,0 +1,555 @@
+openapi: 3.0.0
+info:
+  title: E-sign API
+  description: API for electronic document signing with facial biometric verification
+  version: 1.0.0
+  
+servers:
+  - url: http://localhost:5000
+    description: Development server
+  
+components:
+  securitySchemes:
+    sessionAuth:
+      type: apiKey
+      in: cookie
+      name: session_token
+  
+  schemas:
+    Agreement:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique identifier for the agreement
+        title:
+          type: string
+          description: Title of the agreement
+        content:
+          type: string
+          description: Content of the agreement
+        recipient_email:
+          type: string
+          format: email
+          description: Email of the recipient
+        status:
+          type: string
+          enum: [pending, signed, cancelled]
+          description: Current status of the agreement
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the agreement was created
+
+    Error:
+      type: object
+      properties:
+        success:
+          type: boolean
+          default: false
+        message:
+          type: string
+          description: Error message
+
+security:
+  - sessionAuth: []
+
+paths:
+  /api/agreements:
+    post:
+      summary: Create a new agreement
+      description: Creates a new agreement and sends it to the recipient for signing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - title
+                - content
+                - recipient_email
+              properties:
+                title:
+                  type: string
+                content:
+                  type: string
+                recipient_email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Agreement created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    default: true
+                  agreement_id:
+                    type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/upload-agreement:
+    post:
+      summary: Upload a PDF agreement
+      description: Upload a PDF file as an agreement
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - title
+                - recipient_email
+                - pdf_file
+              properties:
+                title:
+                  type: string
+                recipient_email:
+                  type: string
+                  format: email
+                pdf_file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: PDF uploaded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    default: true
+                  agreement_id:
+                    type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/sign:
+    post:
+      summary: Sign an agreement
+      description: Sign an agreement using facial biometric verification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - agreement_id
+                - client_id
+                - image
+              properties:
+                agreement_id:
+                  type: string
+                client_id:
+                  type: string
+                image:
+                  type: string
+                  format: base64
+                  description: Base64 encoded image data
+      responses:
+        '200':
+          description: Agreement signed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    default: true
+                  message:
+                    type: string
+                  agreement_id:
+                    type: string
+        '400':
+          description: Invalid request or agreement already signed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Agreement not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/pending-agreements:
+    get:
+      summary: Get pending agreements
+      description: Retrieve all pending agreements
+      responses:
+        '200':
+          description: List of pending agreements
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agreements:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Agreement'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/signed-agreements:
+    get:
+      summary: Get signed agreements
+      description: Retrieve all signed agreements
+      responses:
+        '200':
+          description: List of signed agreements
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agreements:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Agreement'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/verify/agreements:
+    post:
+      summary: Verify agreements for an email
+      description: Public endpoint to fetch agreements associated with an email
+      security: []  # No authentication required
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: List of agreements for the email
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    default: true
+                  agreements:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Agreement'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/verify/blockchain/{agreement_id}:
+    get:
+      summary: Verify blockchain record
+      description: Verify the blockchain record and audit trail for an agreement
+      parameters:
+        - name: agreement_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Verification details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    default: true
+                  verification:
+                    type: object
+                  blockchain_valid:
+                    type: boolean
+                  database_consistent:
+                    type: boolean
+                  details:
+                    type: object
+                  blockchain_evolution:
+                    type: array
+                    items:
+                      type: object
+                  audit_trail:
+                    type: array
+                    items:
+                      type: object
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/verify-identity:
+    post:
+      summary: Verify identity
+      description: Verify user's identity using ID document and selfie
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - agreement_id
+                - id_image
+                - selfie_image
+                - client_id
+              properties:
+                agreement_id:
+                  type: string
+                id_image:
+                  type: string
+                  format: base64
+                selfie_image:
+                  type: string
+                  format: base64
+                client_id:
+                  type: string
+      responses:
+        '200':
+          description: Identity verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  agreement_id:
+                    type: string
+                  signed:
+                    type: boolean
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/validate-face-position:
+    post:
+      summary: Validate face position
+      description: Validate if the face is properly positioned in the image
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - image
+              properties:
+                image:
+                  type: string
+                  format: base64
+      responses:
+        '200':
+          description: Face position validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                  message:
+                    type: string
+                  capture:
+                    type: boolean
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/clear-chat:
+    post:
+      summary: Clear chat history
+      description: Clears the chat history for the current session
+      responses:
+        '200':
+          description: Chat history cleared successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    default: true
+
+  /api/generate-contract:
+    post:
+      summary: Generate contract using AI
+      description: Generate contract content using Gemini AI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - prompt
+              properties:
+                prompt:
+                  type: string
+                  description: Prompt for contract generation
+      responses:
+        '200':
+          description: Contract generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  content:
+                    type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/cancelled-agreements:
+    get:
+      summary: Get cancelled agreements
+      description: Retrieve all cancelled agreements
+      responses:
+        '200':
+          description: List of cancelled agreements
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agreements:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Agreement'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/agreements/{agreement_id}/audit-logs:
+    get:
+      summary: Get agreement audit logs
+      description: Retrieve audit logs for a specific agreement
+      parameters:
+        - name: agreement_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Audit logs retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    action_type:
+                      type: string
+                    actor_email:
+                      type: string
+                    timestamp:
+                      type: string
+                      format: date-time
+                    metadata:
+                      type: object
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/extract-face:
+    post:
+      summary: Extract face from image
+      description: Extract and validate face from an uploaded image
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - image
+              properties:
+                image:
+                  type: string
+                  format: base64
+                  description: Base64 encoded image data
+      responses:
+        '200':
+          description: Face extracted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  face:
+                    type: string
+                    format: base64
+                    description: Base64 encoded extracted face image
+        '400':
+          description: Invalid request or no face detected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error' 

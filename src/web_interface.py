@@ -18,9 +18,12 @@ from src.utils.gemini_chat import GeminiChat
 import werkzeug.exceptions
 import cv2
 import json
+from flask_swagger_ui import get_swaggerui_blueprint
+from flask import send_from_directory
 
 app = Flask(__name__, 
-    template_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
+    template_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates'),
+    static_folder=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'static')
 )
 load_dotenv()
 
@@ -946,3 +949,29 @@ def extract_face():
             'success': False,
             'message': str(e)
         }), 400 
+
+# Configure Swagger UI
+SWAGGER_URL = '/api/docs'
+API_URL = '/static/openapi.yaml'
+
+swaggerui_blueprint = get_swaggerui_blueprint(
+    SWAGGER_URL,
+    API_URL,
+    config={
+        'app_name': "E-sign API Documentation",
+        'layout': 'BaseLayout',
+        'validatorUrl': None
+    }
+)
+
+# Register blueprint
+app.register_blueprint(swaggerui_blueprint)
+
+# Add a direct route to serve the OpenAPI spec
+@app.route('/static/openapi.yaml')
+def serve_openapi_spec():
+    return send_from_directory(
+        app.static_folder,
+        'openapi.yaml',
+        mimetype='text/yaml'
+    ) 

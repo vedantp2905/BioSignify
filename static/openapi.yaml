@@ -2,7 +2,7 @@ openapi: 3.0.0
 info:
   title: E-sign API
   description: API for electronic document signing with facial biometric verification
-  version: 1.0.0
+  version: 1.1.0
   
 servers:
   - url: http://localhost:5000
@@ -40,6 +40,10 @@ components:
           type: string
           format: date-time
           description: Timestamp when the agreement was created
+        created_by:
+          type: string
+          format: email
+          description: Email of the agreement creator
 
     Error:
       type: object
@@ -51,11 +55,46 @@ components:
           type: string
           description: Error message
 
+    AuditLog:
+      type: object
+      properties:
+        action_type:
+          type: string
+          enum: [created, signed, cancelled, verification_attempt, id_verification_attempt]
+          description: Type of action recorded
+        actor_email:
+          type: string
+          format: email
+          description: Email of the person who performed the action
+        timestamp:
+          type: string
+          format: date-time
+          description: When the action occurred
+        ip_address:
+          type: string
+          description: IP address of the actor
+        embedding_reference:
+          type: string
+          description: Reference to facial embedding used (for biometric events)
+        transaction_id:
+          type: string
+          description: Unique transaction ID
+        verification_status:
+          type: string
+          description: Verification status for signature events
+        similarity_score:
+          type: number
+          format: float
+          description: Face similarity score for verification attempts
+        signature:
+          type: string
+          description: Digital signature (truncated for display)
+
 security:
   - sessionAuth: []
 
 paths:
-  /api/agreements:
+  /api/create-agreement:
     post:
       summary: Create a new agreement
       description: Creates a new agreement and sends it to the recipient for signing
@@ -89,6 +128,8 @@ paths:
                     type: boolean
                     default: true
                   agreement_id:
+                    type: string
+                  message:
                     type: string
         '400':
           description: Invalid request
@@ -153,16 +194,11 @@ paths:
               required:
                 - agreement_id
                 - client_id
-                - image
               properties:
                 agreement_id:
                   type: string
                 client_id:
                   type: string
-                image:
-                  type: string
-                  format: base64
-                  description: Base64 encoded image data
       responses:
         '200':
           description: Agreement signed successfully
@@ -177,6 +213,8 @@ paths:
                   message:
                     type: string
                   agreement_id:
+                    type: string
+                  transaction_id:
                     type: string
         '400':
           description: Invalid request or agreement already signed
@@ -237,49 +275,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /api/verify/agreements:
-    post:
-      summary: Verify agreements for an email
-      description: Public endpoint to fetch agreements associated with an email
-      security: []  # No authentication required
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - email
-              properties:
-                email:
-                  type: string
-                  format: email
-      responses:
-        '200':
-          description: List of agreements for the email
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    default: true
-                  agreements:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Agreement'
-        '400':
-          description: Invalid request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
-  /api/verify/blockchain/{agreement_id}:
+  /api/verify/agreement/{agreement_id}:
     get:
-      summary: Verify blockchain record
-      description: Verify the blockchain record and audit trail for an agreement
+      summary: Verify agreement
+      description: Verify the agreement and its audit trail
       parameters:
         - name: agreement_id
           in: path
@@ -299,20 +298,23 @@ paths:
                     default: true
                   verification:
                     type: object
-                  blockchain_valid:
-                    type: boolean
-                  database_consistent:
-                    type: boolean
-                  details:
-                    type: object
-                  blockchain_evolution:
-                    type: array
-                    items:
-                      type: object
+                    properties:
+                      valid:
+                        type: boolean
+                      message:
+                        type: string
+                      details:
+                        type: object
                   audit_trail:
                     type: array
                     items:
                       type: object
+        '404':
+          description: Agreement not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
           description: Server error
           content:
@@ -406,57 +408,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /api/clear-chat:
-    post:
-      summary: Clear chat history
-      description: Clears the chat history for the current session
-      responses:
-        '200':
-          description: Chat history cleared successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    default: true
-
-  /api/generate-contract:
-    post:
-      summary: Generate contract using AI
-      description: Generate contract content using Gemini AI
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - prompt
-              properties:
-                prompt:
-                  type: string
-                  description: Prompt for contract generation
-      responses:
-        '200':
-          description: Contract generated successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                  content:
-                    type: string
-        '400':
-          description: Invalid request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
   /api/cancelled-agreements:
     get:
       summary: Get cancelled agreements
@@ -483,7 +434,7 @@ paths:
   /api/agreements/{agreement_id}/audit-logs:
     get:
       summary: Get agreement audit logs
-      description: Retrieve audit logs for a specific agreement
+      description: Retrieve detailed audit logs for a specific agreement
       parameters:
         - name: agreement_id
           in: path
@@ -498,17 +449,7 @@ paths:
               schema:
                 type: array
                 items:
-                  type: object
-                  properties:
-                    action_type:
-                      type: string
-                    actor_email:
-                      type: string
-                    timestamp:
-                      type: string
-                      format: date-time
-                    metadata:
-                      type: object
+                  $ref: '#/components/schemas/AuditLog'
         '500':
           description: Server error
           content:
@@ -552,4 +493,61 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error' 
+                $ref: '#/components/schemas/Error'
+
+  /api/cancel-agreement/{agreement_id}:
+    post:
+      summary: Cancel an agreement
+      description: Cancel a pending agreement
+      parameters:
+        - name: agreement_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agreement cancelled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    default: true
+                  message:
+                    type: string
+        '400':
+          description: Invalid request or agreement cannot be cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /health:
+    get:
+      summary: Health check
+      description: Simple health check endpoint to verify the service is running
+      security: []  # No authentication required
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  message:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: date-time 

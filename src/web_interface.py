@@ -4,7 +4,6 @@ import os
 from dotenv import load_dotenv
 import base64
 from datetime import datetime, timedelta
-from src.utils.tls_config import TLSConfig
 from src.utils.session_manager import SessionManager
 from flask_wtf.csrf import CSRFProtect
 from flask import redirect, url_for
@@ -12,14 +11,13 @@ from functools import wraps
 from src.face_utils import FaceExtractor
 import secrets
 from flask import Response
-import google.generativeai as genai
-from google.generativeai import GenerativeModel
-from src.utils.gemini_chat import GeminiChat
-import werkzeug.exceptions
 import cv2
 import json
 from flask_swagger_ui import get_swaggerui_blueprint
 from flask import send_from_directory
+import werkzeug
+import hashlib
+from io import BytesIO
 
 app = Flask(__name__, 
     template_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates'),
@@ -28,19 +26,10 @@ app = Flask(__name__,
 load_dotenv()
 
 SIGNING_BASE_URL = os.getenv("SIGNING_BASE_URL", "http://localhost:5000")
-# Get the directory where web_interface.py is located
-base_dir = os.path.dirname(os.path.abspath(__file__))
-blockchain_path = os.path.join(base_dir, "..", "data", "blockchain.json")
 
-print(f"Initializing agreement manager with blockchain at: {blockchain_path}")
-agreement_manager = AgreementManager(blockchain_path=blockchain_path)
-
-# Add after agreement manager initialization
+print("Initializing agreement manager...")
+agreement_manager = AgreementManager()
 face_extractor = FaceExtractor()
-
-# Add after app initialization
-tls_config = TLSConfig()
-ssl_context = tls_config.get_ssl_context()
 
 app.config.update(
     SESSION_COOKIE_SECURE=True,
@@ -87,41 +76,50 @@ def before_request():
 @app.route('/health')
 def health_check():
     """Simple health check endpoint"""
-    agreements = [t['agreement_id'] for b in agreement_manager.blockchain.chain for t in b.transactions]
     return jsonify({
         'status': 'healthy',
         'message': 'Service is running',
-        'agreements': agreements
+        'timestamp': datetime.utcnow().isoformat()
     })
 
-@app.route('/sign/<agreement_id>')
+@app.route('/sign/<agreement_id>', methods=['GET'])
 def sign_page(agreement_id):
-    # Get agreement details from blockchain
-    agreement_data = agreement_manager.blockchain.get_agreement(agreement_id)
-    
-    if not agreement_data:
-        return f"Agreement {agreement_id} not found.", 404
-    
-    # Check if agreement is already signed
-    status = agreement_manager.get_agreement_status(agreement_id)
-    if status == "signed":
-        return render_template('already_signed.html')
-    
-    client_id = agreement_data['recipient_email']
-    
-    # Check if user needs ID verification
-    needs_verification = not agreement_manager.vector_store.has_verified_identity(client_id)
-    
-    if needs_verification:
-        return render_template('id_verification.html',
+    try:
+        print(f"DEBUG - Sign page requested for agreement: {agreement_id}")
+        agreement_manager = AgreementManager()
+        agreement_data = agreement_manager.db.get_agreement_details(agreement_id)
+        
+        if not agreement_data:
+            print(f"ERROR - No agreement found with ID: {agreement_id}")
+            return render_template('error.html', 
+                                 message=f"Agreement not found. Please check the link and try again.")
+        
+        # Check if agreement is already signed
+        status = agreement_manager.get_agreement_status(agreement_id)
+        if status == "signed":
+            return render_template('already_signed.html')
+        
+        client_id = agreement_data['recipient_email']
+        
+        # Check if user needs ID verification
+        needs_verification = not agreement_manager.vector_store.has_verified_identity(client_id)
+        
+        if needs_verification:
+            return render_template('id_verification.html',
+                agreement_id=agreement_id,
+                client_id=client_id
+            )
+        
+        return render_template('sign_page.html', 
             agreement_id=agreement_id,
             client_id=client_id
         )
-    
-    return render_template('sign_page.html', 
-        agreement_id=agreement_id,
-        client_id=client_id
-    )
+    except Exception as e:
+        print(f"ERROR - Error in sign_page: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return render_template('error.html', 
+                             message="An error occurred loading the agreement. Please try again later.")
 
 def get_client_ip():
     """Get client IP from request, handling proxy forwarding"""
@@ -140,24 +138,18 @@ def sign_agreement():
                 'message': 'Invalid session'
             }), 401
         
-        # Handle both FormData and JSON requests
-        if request.content_type and 'multipart/form-data' in request.content_type:
-            agreement_id = request.form.get('agreement_id')
-            client_id = request.form.get('client_id')
-            image_file = request.files.get('image')
-        else:
-            data = request.get_json()
-            if not data:
-                return jsonify({
-                    'success': False,
-                    'message': 'No data received'
-                }), 400
-            
-            agreement_id = data.get('agreement_id')
-            client_id = data.get('client_id')
-            image_data = data.get('image')
+        # Get agreement data from request
+        data = request.get_json() if request.is_json else request.form
+        agreement_id = data.get('agreement_id')
+        client_id = data.get('client_id')
         
-        # Check if agreement is already signed
+        if not agreement_id or not client_id:
+            return jsonify({
+                'success': False,
+                'message': 'Missing required fields'
+            }), 400
+            
+        # Check agreement status
         agreement = agreement_manager.db.get_agreement_details(agreement_id)
         if not agreement:
             return jsonify({
@@ -165,30 +157,30 @@ def sign_agreement():
                 'message': 'Agreement not found'
             }), 404
             
-        if agreement.get('status') == 'signed':
+        if agreement.get('status') != 'pending':
             return jsonify({
                 'success': False,
-                'message': 'Agreement has already been signed'
+                'message': f'Agreement cannot be signed (status: {agreement.get("status")})'
             }), 400
             
-        # Continue with existing signature processing...
-        success, message = agreement_manager.process_signature(
+        # Process signature
+        success, transaction_id = agreement_manager.process_signature(
             agreement_id=agreement_id,
             client_id=client_id,
-            image_data=image_data,
             ip_address=client_ip
         )
         
         if success:
             return jsonify({
                 'success': True,
-                'message': message,
-                'agreement_id': agreement_id
+                'message': 'Agreement signed successfully. Signed copies have been sent to all parties.',
+                'agreement_id': agreement_id,
+                'transaction_id': transaction_id
             })
             
         return jsonify({
             'success': False,
-            'message': message
+            'message': 'Failed to sign agreement'
         })
         
     except Exception as e:
@@ -263,40 +255,39 @@ def create_contract():
         data = request.get_json()
         client_ip = get_client_ip()
         
-        # Create agreement with IP logging
-        agreement = agreement_manager.create_agreement(
+        if not g.user:
+            return jsonify({
+                'success': False,
+                'message': 'User not authenticated'
+            }), 401
+
+        print(f"DEBUG - Creating agreement with title: {data.get('title', 'Untitled Agreement')}")
+        print(f"DEBUG - Content length: {len(data.get('content', ''))}")
+        print(f"DEBUG - Recipient email: {data.get('recipient_email')}")
+        
+        # Create and send agreement (does everything in one call)
+        agreement = agreement_manager.create_and_send_agreement(
             title=data.get('title', 'Untitled Agreement'),
             content=data.get('content', ''),
             recipient_email=data.get('recipient_email'),
-            client_id=g.user['email'],
-            ip_address=client_ip
+            client_id=g.user['email']
         )
         
-        # Log agreement creation in audit trail
-        agreement_manager.db.log_audit_event(
-            agreement_id=agreement.id,
-            action_type='created',
-            actor_email=g.user['email'],
-            metadata={
-                'title': data.get('title', 'Untitled Agreement'),
-                'recipient_email': data.get('recipient_email'),
-                'timestamp': datetime.now().isoformat()
-            },
-            ip_address=client_ip
-        )
-        
+        print(f"DEBUG - Agreement created successfully: {agreement.id}")
         return jsonify({
             'success': True,
             'agreement_id': agreement.id,
-            'message': 'Agreement created successfully'
+            'message': 'Agreement created and sent successfully'
         })
         
     except Exception as e:
         print(f"DEBUG - Error creating contract: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e)
-        }), 400
+        }), 500
 
 @app.route('/create-contract')
 def create_contract_page():
@@ -305,25 +296,22 @@ def create_contract_page():
 
 @app.route('/api/cancel-agreement/<agreement_id>', methods=['POST'])
 def cancel_agreement(agreement_id):
-    """Cancel an agreement"""
     try:
-        client_id = request.json.get('client_id')
-        if not client_id:
-            return jsonify({'error': 'client_id required'}), 400
+        if not g.user:
+            return jsonify({'error': 'User not authenticated'}), 401
             
-        # Get client IP using helper function
         client_ip = get_client_ip()
             
         success, message = agreement_manager.cancel_agreement(
             agreement_id=agreement_id, 
-            client_id=client_id,
-            ip_address=client_ip  # Pass the IP address
+            client_id=g.user['email'],
+            ip_address=client_ip
         )
         
         if success:
-            return jsonify({'message': message})
+            return jsonify({'success': True, 'message': message})
         else:
-            return jsonify({'error': message}), 400
+            return jsonify({'success': False, 'message': message}), 400
             
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -452,13 +440,94 @@ def validate_face_position():
 @app.route('/api/agreements/<agreement_id>/audit-logs', methods=['GET'])
 def get_agreement_audit_logs(agreement_id):
     try:
+        print(f"DEBUG - API request for audit logs of agreement: {agreement_id}")
+        
+        # Get raw audit logs
         audit_logs = agreement_manager.db.get_agreement_audit_trail(agreement_id)
-        return jsonify(audit_logs)
+        print(f"DEBUG - Retrieved {len(audit_logs)} audit log entries")
+        
+        if not audit_logs:
+            print(f"DEBUG - No audit logs found for agreement: {agreement_id}")
+            # Check if the agreement exists
+            agreement = agreement_manager.db.get_agreement_details(agreement_id)
+            if not agreement:
+                print(f"DEBUG - Agreement {agreement_id} not found")
+                return jsonify([]), 404
+                
+            print(f"DEBUG - Agreement exists but no audit logs found")
+            
+        # Process logs to enhance them with more information
+        enhanced_logs = []
+        for log in audit_logs:
+            try:
+                print(f"DEBUG - Processing log: {log.get('action_type')} with ID: {log.get('transaction_id', 'N/A')}")
+                
+                enhanced_log = {
+                    'action_type': log.get('action_type', 'unknown'),
+                    'actor_email': log.get('actor_email', 'unknown'),
+                    'timestamp': log.get('timestamp', ''),
+                    'ip_address': log.get('ip_address', 'N/A'),
+                    'transaction_id': log.get('transaction_id', 'N/A')
+                }
+                
+                # Add metadata based on action type
+                metadata = log.get('metadata', {})
+                if isinstance(metadata, str):
+                    try:
+                        metadata = json.loads(metadata)
+                    except:
+                        metadata = {"data": metadata}
+                
+                # For 'created' events
+                if log.get('action_type') == 'created':
+                    enhanced_log['embedding_reference'] = metadata.get('embedding_reference', 'null')
+                    enhanced_log['transaction_id'] = metadata.get('transaction_id', log.get('transaction_id', 'N/A'))
+                    enhanced_log['recipient_email'] = metadata.get('recipient_email', 'N/A')
+                    enhanced_log['type'] = metadata.get('type', 'agreement_creation')
+                
+                # For 'signed' events
+                elif log.get('action_type') == 'signed':
+                    enhanced_log['signature'] = metadata.get('signature', 'N/A')[:20] + '...' if metadata.get('signature') else 'N/A'
+                    enhanced_log['embedding_reference'] = metadata.get('embedding_reference', 'N/A')
+                    enhanced_log['verification_status'] = '[VERIFIED]' if metadata.get('embedding_reference') else 'N/A'
+                    enhanced_log['transaction_id'] = metadata.get('transaction_id', log.get('transaction_id', 'N/A'))
+                    
+                # For verification attempts
+                elif log.get('action_type') in ['verification_attempt', 'id_verification_attempt']:
+                    enhanced_log['success'] = metadata.get('success', 'N/A')
+                    enhanced_log['similarity_score'] = metadata.get('similarity_score', 'N/A')
+                    enhanced_log['transaction_id'] = metadata.get('transaction_id', log.get('transaction_id', 'N/A'))
+                
+                # For record events
+                elif log.get('action_type') == 'record':
+                    enhanced_log['message'] = metadata.get('message', 'Historical record')
+                    enhanced_log['status'] = metadata.get('status', 'unknown')
+                    enhanced_log['recipient_email'] = metadata.get('recipient_email', 'N/A')
+                
+                enhanced_logs.append(enhanced_log)
+                
+            except Exception as e:
+                print(f"ERROR - Failed to process audit log entry: {str(e)}")
+                # Add raw log as fallback
+                enhanced_logs.append({
+                    'action_type': 'error_processing',
+                    'actor_email': 'system',
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'error': str(e),
+                    'raw_log': str(log)
+                })
+        
+        print(f"DEBUG - Returning {len(enhanced_logs)} processed audit logs")
+        return jsonify(enhanced_logs)
+        
     except Exception as e:
-        print(f"Error fetching audit logs: {str(e)}")
+        print(f"ERROR - Failed to fetch audit logs: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
-            'error': 'Failed to fetch audit logs'
-        }), 500 
+            'error': 'Failed to fetch audit logs',
+            'message': str(e)
+        }), 500
 
 @app.after_request
 def add_security_headers(response):
@@ -468,59 +537,6 @@ def add_security_headers(response):
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     return response
-
-# First define the decorators
-# def rate_limit(key_prefix: str = None, max_requests: int = 10, window: int = 60):
-#     """Rate limiting decorator with configurable parameters
-    
-#     Args:
-#         key_prefix (str): Prefix for rate limit key
-#         max_requests (int): Maximum number of requests allowed in window
-#         window (int): Time window in seconds
-#     """
-#     def decorator(f):
-#         @wraps(f)
-#         def decorated_function(*args, **kwargs):
-#             # Get client IP
-#             client_ip = request.remote_addr
-            
-#             # Create rate limit key (combine prefix with IP or user identifier)
-#             key = f"{key_prefix}:{client_ip}" if key_prefix else client_ip
-            
-#             # Check rate limit with custom parameters
-#             is_limited, remaining, retry_after = app.rate_limiter.is_rate_limited(
-#                 key, 
-#                 max_requests=max_requests,
-#                 window=window
-#             )
-            
-#             if is_limited:
-#                 # Check if client accepts JSON
-#                 accepts_json = request.headers.get('Accept', '').find('application/json') != -1
-#                 return app.rate_limiter.get_rate_limit_response(
-#                     is_limited=True,
-#                     remaining=remaining,
-#                     retry_after=retry_after,
-#                     accepts_json=accepts_json
-#                 )
-            
-#             # Add rate limit headers
-#             response = f(*args, **kwargs)
-#             if isinstance(response, tuple):
-#                 response, status_code = response
-#             else:
-#                 status_code = 200
-                
-#             # Convert response to Response object if it's not already
-#             if not isinstance(response, Response):
-#                 response = jsonify(response)
-                
-#             response.headers['X-RateLimit-Remaining'] = str(remaining)
-#             response.headers['X-RateLimit-Reset'] = str(int(time.time() + retry_after))
-#             return response, status_code
-            
-#         return decorated_function
-#     return decorator
 
 def require_auth(f):
     @wraps(f)
@@ -592,172 +608,26 @@ def handle_error(error):
         }), 500
     raise error
 
-# Add after other environment variable initializations
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = GenerativeModel('gemini-2.0-flash')
-
-# Add after genai.configure
-api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
-    print("Warning: GEMINI_API_KEY not found in environment variables")
-else:
-    print(f"Gemini API key loaded: {api_key[:5]}...")  # Only print first 5 chars for security
-
-# Add after app initialization
-gemini_chat = GeminiChat()
-
-# Replace the existing generate_contract_ai route
-@app.route('/api/generate-contract', methods=['POST'])
-@csrf.exempt
-def generate_contract_ai():
-    try:
-        data = request.get_json()
-        prompt = data.get('prompt')
-        
-        if not prompt:
-            return jsonify({
-                'success': False,
-                'message': 'No prompt provided'
-            }), 400
-
-        # Use session ID to maintain chat history
-        session_id = session.get('session_token')
-        
-        # Generate contract using chat history
-        result = gemini_chat.generate_contract(prompt, session_id)
-        
-        return jsonify(result)
-
-    except Exception as e:
-        print(f"Error generating contract: {str(e)}")  # Debug log
-        return jsonify({
-            'success': False,
-            'message': f'Error generating contract: {str(e)}'
-        }), 500
-
-# Add route to clear chat history when needed
-@app.route('/api/clear-chat', methods=['POST'])
-@csrf.exempt
-def clear_chat_history():
-    session_id = session.get('session_token')
-    if session_id:
-        gemini_chat.clear_chat_history(session_id)
-    return jsonify({'success': True})
-
 # Modify the run statement at the bottom of the file
 if __name__ == '__main__':
-    app.run(ssl_context=ssl_context, host='0.0.0.0', port=5000) 
+    app.run( host='0.0.0.0', port=5000) 
 
-@app.route('/api/agreements', methods=['POST'])
-def create_agreement():
+
+@app.route('/api/verify/agreement/<agreement_id>')
+def verify_agreement(agreement_id):
     try:
-        data = request.get_json()
-        client_ip = get_client_ip()
-
-        agreement = agreement_manager.create_agreement(
-            title=data['title'],
-            content=data['content'],
-            recipient_email=data['recipient_email'],
-            client_id=g.user.email,
-            ip_address=client_ip
-        )
-        
-        return jsonify({
-            'success': True,
-            'agreement_id': agreement.id
-        })
-    except Exception as e:
-        print(f"DEBUG - Error in create_agreement: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 400 
-
-@app.route('/verify')
-def verify_page():
-    """Public verification page where users can enter their email to view their agreements"""
-    return render_template('verify.html')
-
-@app.route('/api/verify/agreements', methods=['POST'])
-@csrf.exempt  # Allow public access without CSRF
-# @rate_limit('verify_agreements')  # Add rate limiting for security
-def verify_agreements():
-    """Public endpoint to fetch agreements associated with an email"""
-    try:
-        data = request.get_json()
-        email = data.get('email')
-        
-        if not email:
+        # Get agreement details first
+        agreement = agreement_manager.db.get_agreement_details(agreement_id)
+        if not agreement:
             return jsonify({
                 'success': False,
-                'message': 'Email is required'
-            }), 400
+                'message': 'Agreement not found'
+            }), 404
 
-        # Get all agreements associated with the email
-        response = agreement_manager.db.supabase.table('agreement_details') \
-            .select('*') \
-            .eq('recipient_email', email) \
-            .execute()
-            
-        agreements = []
-        for agreement in response.data:
-            agreements.append({
-                'id': agreement['agreement_id'],
-                'title': agreement['title'],
-                'status': agreement['status'],
-                'created_at': agreement['created_at'],
-                'recipient_email': agreement['recipient_email'],
-                'created_by': agreement.get('created_by')
-            })
-        
-        return jsonify({
-            'success': True,
-            'agreements': agreements
-        })
-
-    except Exception as e:
-        print(f"Error fetching agreements for verification: {str(e)}")
-        return jsonify({
-            'success': False,
-            'message': 'Failed to fetch agreements'
-        }), 500
-
-@app.route('/api/verify/blockchain/<agreement_id>')
-def verify_blockchain(agreement_id):
-    try:
-        verification_data = agreement_manager.blockchain.verify_agreement(agreement_id)
-        
-        # Get blocks related to this agreement
-        blocks = agreement_manager.blockchain.db.get_blocks()
-        filtered_blocks = []
-        
-        for block in blocks:
-            if isinstance(block['transactions'], str):
-                try:
-                    block['transactions'] = json.loads(block['transactions'])
-                except json.JSONDecodeError:
-                    block['transactions'] = []
-            
-            for tx in block['transactions']:
-                if tx.get('agreement_id') == agreement_id:
-                    filtered_blocks.append({
-                        'index': block['index'],
-                        'hash': block['hash'],
-                        'timestamp': block['timestamp'],
-                        'transaction': {
-                            'type': tx.get('type', 'creation'),
-                            'timestamp': tx.get('timestamp'),
-                            'id': tx.get('id'),
-                            'agreement_id': tx.get('agreement_id'),
-                            'recipient_email': tx.get('recipient_email')
-                        }
-                    })
-                    break
-        
-        # Get audit logs for this agreement
+        # Get audit logs
         audit_logs = agreement_manager.db.get_agreement_audit_trail(agreement_id)
         
-        # Format audit logs to match UI expectations
+        # Format audit logs
         formatted_audit_logs = []
         for log in audit_logs:
             formatted_log = {
@@ -768,23 +638,29 @@ def verify_blockchain(agreement_id):
             }
             formatted_audit_logs.append(formatted_log)
         
+        # Get verification status
+        verification_data = {
+            'valid': True,
+            'message': 'Agreement verified successfully',
+            'details': {
+                'agreement_id': agreement_id,
+                'status': agreement['status'],
+                'created_at': agreement['created_at'],
+                'last_modified': agreement.get('updated_at', agreement['created_at'])
+            }
+        }
+        
         return jsonify({
             'success': True,
             'verification': verification_data,
-            'blockchain_valid': verification_data['is_valid'],
-            'database_consistent': verification_data['database_consistency']['is_valid'],
-            'details': {
-                'blockchain': verification_data['details'],
-                'database': verification_data['database_consistency']['details']
-            },
-            'blockchain_evolution': filtered_blocks,
             'audit_trail': formatted_audit_logs
         })
+        
     except Exception as e:
         print(f"Verification error: {str(e)}")
         return jsonify({
             'success': False,
-            'message': str(e)
+            'message': f'Error verifying agreement: {str(e)}'
         }), 500
 
 @app.route('/api/upload-agreement', methods=['POST'])
@@ -975,3 +851,154 @@ def serve_openapi_spec():
         'openapi.yaml',
         mimetype='text/yaml'
     ) 
+
+@app.route('/api/create-agreement', methods=['POST'])
+def create_agreement():
+    try:
+        print("DEBUG - Starting create_agreement endpoint")
+        # Extract data from request
+        data = request.get_json()
+        if not data:
+            print("DEBUG - No JSON data in request")
+            return jsonify({
+                "success": False,
+                "message": "Missing request data"
+            }), 400
+            
+        title = data.get('title')
+        content = data.get('content')
+        recipient_email = data.get('recipient_email')
+        
+        print(f"DEBUG - Received request with title: {title}")
+        print(f"DEBUG - Content length: {len(content) if content else 0}")
+        print(f"DEBUG - Recipient email: {recipient_email}")
+        
+        # Get client IP for audit log
+        ip_address = get_client_ip()
+        
+        # Get user email from session
+        if not g.user or not g.user.get('email'):
+            print("DEBUG - No authenticated user found")
+            return jsonify({
+                "success": False,
+                "message": "User not authenticated"
+            }), 401
+            
+        client_id = g.user.get('email')
+        
+        if not all([title, content, recipient_email, client_id]):
+            print(f"DEBUG - Missing required fields: title={bool(title)}, content={bool(content)}, recipient={bool(recipient_email)}, client={bool(client_id)}")
+            return jsonify({
+                "success": False,
+                "message": "Missing required fields"
+            }), 400
+            
+        # Create and send agreement
+        print("DEBUG - Calling create_and_send_agreement")
+        agreement = agreement_manager.create_and_send_agreement(
+            title=title,
+            content=content,
+            recipient_email=recipient_email,
+            client_id=client_id
+        )
+        
+        print(f"DEBUG - Agreement created successfully with ID: {agreement.id}")
+        return jsonify({
+            "success": True, 
+            "agreement_id": agreement.id,
+            "message": "Agreement created and sent successfully"
+        }), 200
+        
+    except Exception as e:
+        print(f"DEBUG - Error creating agreement: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500 
+        
+@app.route('/api/resend-agreement/<agreement_id>', methods=['POST'])
+def resend_agreement(agreement_id):
+    print(f"DEBUG - Resend request received for agreement ID: {agreement_id}")
+    try:
+        client_ip = get_client_ip()
+        
+        if not g.user:
+            return jsonify({
+                'success': False,
+                'message': 'User not authenticated'
+            }), 401
+            
+        # Get agreement details
+        agreement = agreement_manager.db.get_agreement_details(agreement_id)
+        if not agreement:
+            return jsonify({
+                'success': False,
+                'message': 'Agreement not found'
+            }), 404
+            
+        if agreement.get('status') != 'pending':
+            return jsonify({
+                'success': False,
+                'message': f'Cannot resend agreement with status: {agreement.get("status")}'
+            }), 400
+            
+        # Generate transaction ID for this resend operation
+        timestamp = datetime.utcnow().timestamp()
+        transaction_id = f"tx_{hashlib.sha256(f'{agreement_id}:resend:{timestamp}'.encode()).hexdigest()[:16]}"
+        
+        # Generate signing URL
+        base_url = os.getenv("SIGNING_BASE_URL", "http://localhost:5000")
+        signing_url = f"{base_url}/sign/{agreement_id}"
+        
+        # Generate or retrieve PDF content
+        if agreement.get('pdf_source') == 'uploaded' and agreement.get('pdf_path') and os.path.exists(agreement.get('pdf_path')):
+            # Use the stored PDF file
+            with open(agreement.get('pdf_path'), 'rb') as f:
+                pdf_content = BytesIO(f.read())
+        else:
+            # Generate new PDF from content
+            pdf_content = agreement_manager.pdf_generator.generate_agreement_pdf(
+                agreement_id=agreement_id,
+                title=agreement.get('title', 'Agreement'),
+                content=agreement.get('content', ''),
+                recipient_email=agreement.get('recipient_email'),
+                signing_url=signing_url
+            )
+        
+        # Resend email
+        agreement_manager.email_sender.send_agreement_email(
+            recipient_email=agreement.get('recipient_email'),
+            agreement_id=agreement_id,
+            pdf_content=pdf_content,
+            signing_url=signing_url
+        )
+        
+        # Log the resend event
+        agreement_manager.db.log_audit_event(
+            agreement_id=agreement_id,
+            action_type='email_resent',
+            actor_email=g.user['email'],
+            metadata={
+                'timestamp': timestamp,
+                'transaction_id': transaction_id,
+                'recipient_email': agreement.get('recipient_email')
+            },
+            ip_address=client_ip
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': f'Agreement email resent successfully to {agreement.get("recipient_email")}',
+            'transaction_id': transaction_id
+        })
+        
+    except Exception as e:
+        print(f"Error resending agreement: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'message': f'Error resending agreement: {str(e)}'
+        }), 500

@@ -5,6 +5,9 @@
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
 </head>
 <body class="bg-gray-100">
+    <!-- Add CSRF token input -->
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    
     <div class="container mx-auto px-4 py-8">
         <a href="/" class="text-blue-600 hover:text-blue-800 mb-8 inline-block">← Back to Home</a>
         
@@ -45,10 +48,16 @@
                                     <p class="text-gray-600">Recipient: ${agreement.recipient_email}</p>
                                     <p class="text-gray-600">Created: ${formatDate(agreement.created_at)}</p>
                                 </div>
-                                <a href="/agreement/${agreement.id}" 
-                                   class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
-                                    View Details
-                                </a>
+                                <div class="flex space-x-2">
+                                    <button onclick="resendAgreement('${agreement.id}')"
+                                            class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                                        Resend
+                                    </button>
+                                    <a href="/agreement/${agreement.id}" 
+                                       class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                                        View Details
+                                    </a>
+                                </div>
                             </div>
                         </div>
                     `;
@@ -60,6 +69,47 @@
                     <div class="text-red-600">Error loading agreements. Please try again later.</div>
                 `;
             });
+
+        function resendAgreement(agreementId) {
+            console.log(`Resending agreement with ID: ${agreementId}`);
+            if (!confirm('Resend signing email for this agreement?')) {
+                return;
+            }
+
+            // Get the CSRF token with error handling
+            const csrfTokenInput = document.querySelector('input[name="csrf_token"]');
+            if (!csrfTokenInput) {
+                console.error('CSRF token not found');
+                alert('Error: CSRF token missing. Please refresh the page and try again.');
+                return;
+            }
+
+            fetch(`/api/resend-agreement/${agreementId}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrfTokenInput.value
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    alert(data.message);
+                } else {
+                    alert('Error: ' + (data.message || 'Failed to resend agreement'));
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error: ' + error.message);
+            });
+        }
     </script>
 </body>
+</html> 
 </html> 

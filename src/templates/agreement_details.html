@@ -58,6 +58,10 @@
                        class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors">
                         Sign Agreement
                     </a>
+                    <button onclick="resendAgreement('{{ agreement.agreement_id }}')"
+                            class="px-3 py-1 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded">
+                        Resend
+                    </button>
                     {% else %}
                     <button onclick="cancelAgreement('{{ agreement.agreement_id }}', '{{ agreement.recipient_email }}')"
                             class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">
@@ -126,91 +130,134 @@
         loadAuditLogs();
     });
 
-    async function loadAuditLogs() {
+    function loadAuditLogs() {
         const container = document.getElementById('audit-logs-container');
         container.innerHTML = '<div class="p-4 text-center">Loading audit logs...</div>';
 
         try {
-            const response = await fetch(`/api/agreements/{{ agreement.agreement_id }}/audit-logs`);
-            const auditLogs = await response.json();
-            
-            if (auditLogs.length === 0) {
-                container.innerHTML = '<div class="p-4 text-center text-gray-500">No audit logs found</div>';
-                return;
-            }
-
-            container.innerHTML = auditLogs.map(log => {
-                const icon = getActionIcon(log.action_type);
-                const timestamp = formatDate(log.timestamp);
-                let metadataHtml = '';
-
-                if (log.metadata) {
-                    if (log.action_type === 'verification_attempt') {
-                        const score = log.metadata.similarity_score?.toFixed(2);
-                        const success = log.metadata.success.toLowerCase() === 'true';
-                        const firstTime = log.metadata.first_time === true;
-                        metadataHtml = `
-                            <div class="mt-2 text-sm text-gray-500">
-                                Similarity Score: ${score}
-                                <span class="ml-2 ${success ? 'text-green-500' : 'text-red-500'}">
-                                    ${success ? '✓ Verified' : '✗ Failed'}
-                                </span>
-                                ${firstTime ? '<span class="ml-2">(First-time verification)</span>' : ''}
-                            </div>
-                        `;
-                    } else if (log.action_type === 'signed') {
-                        metadataHtml = `
-                            <div class="mt-2 text-sm text-gray-500">
-                                Verification Method: ${log.metadata.verification_method || 'N/A'}
-                                ${log.metadata.similarity_score ? 
-                                    `<br>Similarity Score: ${parseFloat(log.metadata.similarity_score).toFixed(2)}` : 
-                                    ''}
-                                <span class="text-green-500 ml-2">✓ Verified</span>
-                            </div>
-                        `;
-                    } else if (log.action_type === 'error') {
-                        metadataHtml = `
-                            <div class="mt-2 text-sm text-red-500">
-                                Error Type: ${log.metadata.error_type || 'Unknown'}
-                                <br>Message: ${log.metadata.error_message || 'No details available'}
-                            </div>
-                        `;
-                    } else if (Object.keys(log.metadata).length > 0) {
-                        metadataHtml = `
-                            <div class="mt-2 text-sm text-gray-500">
-                                ${Object.entries(log.metadata)
-                                    .filter(([key]) => key !== 'timestamp')
-                                    .map(([key, value]) => `
-                                        <div>${key.replace('_', ' ').charAt(0).toUpperCase() + key.slice(1)}: ${value}</div>
-                                    `).join('')}
-                            </div>
-                        `;
+            fetch(`/api/agreements/{{ agreement.agreement_id }}/audit-logs`)
+                .then(response => response.json())
+                .then(auditLogs => {
+                    if (!auditLogs || auditLogs.length === 0) {
+                        container.innerHTML = '<div class="p-4 text-center text-gray-500">No audit logs found</div>';
+                        return;
                     }
-                }
 
-                return `
-                    <div class="p-4 hover:bg-gray-50">
-                        <div class="flex items-start">
-                            <span class="text-2xl mr-3">${icon}</span>
-                            <div class="flex-1">
-                                <div class="flex justify-between">
-                                    <span class="font-medium capitalize">
-                                        ${log.action_type.replace('_', ' ')}
-                                    </span>
-                                    <span class="text-gray-500 text-sm">
-                                        ${timestamp}
-                                    </span>
+                    // Filter out pdf_sent events
+                    const filteredLogs = auditLogs.filter(log => log.action_type !== 'pdf_sent');
+
+                    if (filteredLogs.length === 0) {
+                        container.innerHTML = '<div class="p-4 text-center text-gray-500">No audit logs found</div>';
+                        return;
+                    }
+
+                    container.innerHTML = filteredLogs.map(log => {
+                        const icon = getActionIcon(log.action_type);
+                        const timestamp = formatDate(log.timestamp);
+                        
+                        // Common transaction ID display for all event types
+                        const transactionIdDisplay = `
+                            <div class="mt-2 pt-2 border-t border-gray-100">
+                                <div class="text-xs font-mono text-gray-500">
+                                    Transaction ID: ${log.transaction_id || 'N/A'}
                                 </div>
-                                <div class="text-sm text-gray-600">
-                                    By: ${log.actor_email}
-                                </div>
-                                ${metadataHtml}
                             </div>
-                        </div>
-                    </div>
-                `;
-            }).join('');
+                        `;
+                        
+                        let metadataHtml = '';
 
+                        // Created event - show embedding reference and recipient email
+                        if (log.action_type === 'created') {
+                            metadataHtml = `
+                                <div class="mt-2 text-sm text-gray-500">
+                                    <div>Recipient email: ${log.recipient_email || 'N/A'}</div>
+                                    <div>Type: ${log.type || 'Standard'}</div>
+                                </div>
+                            `;
+                        } 
+                        // ID verification attempt - show similarity score and success
+                        else if (log.action_type === 'id_verification_attempt' || log.action_type === 'verification_attempt') {
+                            const score = typeof log.similarity_score === 'number' ? 
+                                log.similarity_score.toFixed(2) : log.similarity_score;
+                            const success = String(log.success).toLowerCase() === 'true';
+                            metadataHtml = `
+                                <div class="mt-2 text-sm text-gray-500">
+                                    <div>Similarity score: ${score || 'N/A'}</div>
+                                    <div>Success: 
+                                        <span class="${success ? 'text-green-500' : 'text-red-500'}">
+                                            ${success ? '✓ Verified' : '✗ Failed'}
+                                        </span>
+                                    </div>
+                                    <div>IP address: ${log.ip_address || 'N/A'}</div>
+                                </div>
+                            `;
+                        } 
+                        // Signed event - show verification status, embedding reference
+                        else if (log.action_type === 'signed') {
+                            metadataHtml = `
+                                <div class="mt-2 text-sm text-gray-500">
+                                    <div>Verification status: 
+                                        <span class="text-green-500 font-bold">${log.verification_status || 'Verified'}</span>
+                                    </div>
+                                    <div>Embedding reference: ${log.embedding_reference || 'N/A'}</div>
+                                    <div>IP address: ${log.ip_address || 'N/A'}</div>
+                                    <div>Digital signature: ${log.signature || 'N/A'}</div>
+                                </div>
+                            `;
+                        }
+                        // Cancelled event
+                        else if (log.action_type === 'cancelled') {
+                            metadataHtml = `
+                                <div class="mt-2 text-sm text-gray-500">
+                                    <div>Cancelled by: ${log.actor_email || 'N/A'}</div>
+                                </div>
+                            `;
+                        }
+                        // Error events
+                        else if (log.action_type.includes('error')) {
+                            metadataHtml = `
+                                <div class="mt-2 text-sm text-red-500">
+                                    <div>Error message: ${log.error_message || 'Unknown error'}</div>
+                                    <div>IP address: ${log.ip_address || 'N/A'}</div>
+                                </div>
+                            `;
+                        }
+                        // Email resent event
+                        else if (log.action_type === 'email_resent') {
+                            metadataHtml = `
+                                <div class="mt-2 text-sm text-gray-500">
+                                </div>
+                            `;
+                        }
+
+                        return `
+                            <div class="p-4 hover:bg-gray-50">
+                                <div class="flex items-start">
+                                    <span class="text-2xl mr-3">${icon}</span>
+                                    <div class="flex-1">
+                                        <div class="flex justify-between">
+                                            <span class="font-medium capitalize">
+                                                ${log.action_type.replace(/_/g, ' ')}
+                                            </span>
+                                            <span class="text-gray-500 text-sm">
+                                                ${timestamp}
+                                            </span>
+                                        </div>
+                                        <div class="text-sm text-gray-600">
+                                            By: ${log.actor_email}
+                                        </div>
+                                        ${metadataHtml}
+                                        ${transactionIdDisplay}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                })
+                .catch(error => {
+                    console.error('Error loading audit logs:', error);
+                    container.innerHTML = '<div class="p-4 text-center text-red-500">Error loading audit logs</div>';
+                });
         } catch (error) {
             console.error('Error loading audit logs:', error);
             container.innerHTML = '<div class="p-4 text-center text-red-500">Error loading audit logs</div>';
@@ -223,7 +270,10 @@
             'signed': '✍️',
             'cancelled': '❌',
             'verification_attempt': '🔍',
-            'error': '⚠️'
+            'id_verification_attempt': '🔎',
+            'email_resent': '📨',
+            'error': '⚠️',
+            'signature_error': '⚠️'
         };
         return icons[actionType] || '📝';
     }

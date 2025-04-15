@@ -1,852 +1,182 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>BioSign - Create Contract</title>
+    <title>Create Contract - BioSign</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <style>
-        .gradient-bg {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-
-        /* Custom scrollbar styling */
-        .custom-scrollbar::-webkit-scrollbar {
-            width: 6px;
-        }
-        
-        .custom-scrollbar::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 10px;
-        }
-        
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-            background: #d1d5db;
-            border-radius: 10px;
-        }
-        
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-            background: #9ca3af;
-        }
-
-        /* Message animations */
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .chat-message {
-            animation: slideIn 0.3s ease-out forwards;
-        }
-
-        .markdown-content {
-            line-height: 1.8;
-            color: #24292e;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-        }
-        
-        .markdown-content h1,
-        .markdown-content h2,
-        .markdown-content h3,
-        .markdown-content h4,
-        .markdown-content h5,
-        .markdown-content h6 {
-            margin-top: 24px;
-            margin-bottom: 16px;
-            font-weight: 600;
-            line-height: 1.25;
-        }
-        
-        .markdown-content h1 { 
-            font-size: 2em;
-            padding-bottom: .3em;
-            border-bottom: 1px solid #eaecef;
-        }
-        
-        .markdown-content h2 { 
-            font-size: 1.5em;
-            padding-bottom: .3em;
-            border-bottom: 1px solid #eaecef;
-        }
-        
-        .markdown-content h3 { font-size: 1.25em; }
-        .markdown-content h4 { font-size: 1em; }
-        .markdown-content h5 { font-size: 0.875em; }
-        .markdown-content h6 { font-size: 0.85em; color: #6a737d; }
-        
-        .markdown-content p {
-            margin-bottom: 16px;
-        }
-        
-        .markdown-content ul,
-        .markdown-content ol {
-            margin-top: 0;
-            margin-bottom: 16px;
-            padding-left: 2em;
-        }
-        
-        .markdown-content ul ul,
-        .markdown-content ul ol,
-        .markdown-content ol ol,
-        .markdown-content ol ul {
-            margin-top: 0;
-            margin-bottom: 0;
-        }
-        
-        .markdown-content li {
-            margin: 0.25em 0;
-        }
-        
-        .markdown-content li + li {
-            margin-top: 0.25em;
-        }
-        
-        .markdown-content code {
-            padding: 0.2em 0.4em;
-            margin: 0;
-            font-size: 85%;
-            background-color: rgba(27, 31, 35, 0.05);
-            border-radius: 3px;
-            font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
-        }
-        
-        .markdown-content pre {
-            padding: 16px;
-            overflow: auto;
-            font-size: 85%;
-            line-height: 1.45;
-            background-color: #f6f8fa;
-            border-radius: 3px;
-            margin-bottom: 16px;
-        }
-        
-        .markdown-content pre code {
-            display: inline;
-            max-width: auto;
-            padding: 0;
-            margin: 0;
-            overflow: visible;
-            line-height: inherit;
-            word-wrap: normal;
-            background-color: transparent;
-            border: 0;
-        }
-        
-        .markdown-content blockquote {
-            padding: 0 1em;
-            color: #6a737d;
-            border-left: 0.25em solid #dfe2e5;
-            margin: 0 0 16px 0;
-        }
-        
-        .markdown-content blockquote > :first-child {
-            margin-top: 0;
-        }
-        
-        .markdown-content blockquote > :last-child {
-            margin-bottom: 0;
-        }
-        
-        .markdown-content hr {
-            height: 0.25em;
-            padding: 0;
-            margin: 24px 0;
-            background-color: #e1e4e8;
-            border: 0;
-        }
-        
-        .markdown-content table {
-            display: block;
-            width: 100%;
-            overflow: auto;
-            margin-top: 0;
-            margin-bottom: 16px;
-            border-spacing: 0;
-            border-collapse: collapse;
-        }
-        
-        .markdown-content table th {
-            font-weight: 600;
-        }
-        
-        .markdown-content table th,
-        .markdown-content table td {
-            padding: 6px 13px;
-            border: 1px solid #dfe2e5;
-        }
-        
-        .markdown-content table tr {
-            background-color: #fff;
-            border-top: 1px solid #c6cbd1;
-        }
-        
-        .markdown-content table tr:nth-child(2n) {
-            background-color: #f6f8fa;
-        }
-        
-        .markdown-content img {
-            max-width: 100%;
-            box-sizing: content-box;
-            background-color: #fff;
-        }
-        
-        .markdown-content strong {
-            font-weight: 600;
-        }
-        
-        .markdown-content em {
-            font-style: italic;
-        }
-        
-        .markdown-content del {
-            text-decoration: line-through;
-        }
-        
-        /* Task lists */
-        .markdown-content ul.contains-task-list {
-            padding-left: 0;
-        }
-        
-        .markdown-content .task-list-item {
-            list-style-type: none;
-            padding-left: 0;
-        }
-        
-        .markdown-content .task-list-item input {
-            margin: 0 0.2em 0.25em -1.6em;
-            vertical-align: middle;
-        }
-        
-        /* Links */
-        .markdown-content a {
-            color: #0366d6;
-            text-decoration: none;
-        }
-        
-        .markdown-content a:hover {
-            text-decoration: underline;
-        }
-
-        #content-preview {
-            min-height: 243px; /* Match textarea height */
-        }
-
-        /* Prevent text selection while resizing */
-        body.resize-active {
-            user-select: none;
-            cursor: col-resize;
-        }
-        
-        #resizer {
-            position: relative;
-        }
-        
-        #resizer::after {
-            content: "";
-            position: absolute;
-            left: 50%;
-            top: 50%;
-            transform: translate(-50%, -50%);
-            height: 2rem;
-            width: 4px;
-            background-color: #e5e7eb;
-            border-radius: 2px;
-            transition: background-color 0.2s;
-        }
-        
-        #resizer:hover::after {
-            background-color: #a78bfa;
-        }
-        
-        #resizer:active::after {
-            background-color: #7c3aed;
-        }
-        
-        #content-container {
-            min-height: 243px;
-        }
-        
-        #content {
-            height: 243px;
-            resize: vertical;
-        }
-        
-        #content-preview {
-            height: 243px;
-        }
-    </style>
 </head>
-<body class="gradient-bg min-h-screen">
-    <div class="container mx-auto px-4 py-8">
-        <!-- Header -->
-        <div class="flex items-center mb-8">
-            <a href="/" class="text-white hover:text-gray-200 flex items-center group">
-                <svg class="w-5 h-5 mr-2 transform group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
-                </svg>
-                Back to Home
-            </a>
+<body class="bg-gray-100">
+    <nav class="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-4 shadow-lg">
+        <div class="container mx-auto">
+            <h1 class="text-2xl font-bold">Create New Contract</h1>
         </div>
+    </nav>
 
-        <div class="max-w-4xl mx-auto">
-            <!-- Title Section with Animation -->
-            <div class="text-center mb-12">
-                <h1 class="text-4xl font-bold text-gray-800 mb-4">Create New Contract</h1>
-            </div>
-
-            <!-- Form Card -->
-            <div class="bg-white rounded-2xl shadow-xl p-8">
-                <!-- Tab Navigation -->
-                <div class="flex mb-6 border-b">
-                    <button id="draft-tab" 
-                            class="px-6 py-3 border-b-2 border-purple-600 text-purple-600 font-semibold"
-                            onclick="switchTab('draft')">
-                        Draft Contract
+    <div class="container mx-auto px-4 py-8">
+        <div class="max-w-3xl mx-auto">
+            <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+                <div class="flex justify-center items-center space-x-4 mb-6">
+                    <button id="createByContentBtn" class="px-4 py-2 text-white bg-indigo-600 rounded-md hover:bg-indigo-700">
+                        Create with Text Content
                     </button>
-                    <button id="upload-tab" 
-                            class="px-6 py-3 border-b-2 border-transparent text-gray-500 hover:text-gray-700"
-                            onclick="switchTab('upload')">
+                    <button id="createByUploadBtn" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300">
                         Upload PDF
                     </button>
                 </div>
+                
+                <!-- Create with Text Content Form -->
+                <form id="contentForm" class="space-y-6">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Contract Title</label>
+                        <input type="text" name="title" required
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
 
-                <!-- Draft Contract Form -->
-                <div id="draft-form" class="transition-all duration-300">
-                    <div class="flex justify-end mb-6">
-                        <button id="ai-draft-button" 
-                                class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2 transform hover:scale-105 transition-all duration-300">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                            </svg>
-                            Generate with AI
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Recipient Email</label>
+                        <input type="email" name="recipient_email" required
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Contract Content</label>
+                        <textarea name="content" required rows="10"
+                                  class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+                    </div>
+
+                    <div class="flex justify-end space-x-4">
+                        <button type="button" onclick="window.location.href='/'"
+                                class="px-4 py-2 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300">
+                            Cancel
+                        </button>
+                        <button type="submit"
+                                class="px-4 py-2 text-white bg-indigo-600 rounded-md hover:bg-indigo-700">
+                            Create Contract
                         </button>
                     </div>
-                    <form id="contract-form" class="space-y-6" role="form" aria-label="Create Contract Form">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <div class="transition-all duration-300 focus-within:scale-[1.02]">
-                            <label class="block text-gray-700 font-bold mb-2" for="title" id="title-label">
-                                Contract Title
-                            </label>
-                            <input class="w-full px-4 py-3 rounded-lg border border-gray-400 bg-purple-200 focus:border-blue-600 focus:ring-2 focus:ring-blue-300 transition-all duration-300 placeholder-black" 
-                                   id="title" type="text" required aria-labelledby="title-label" placeholder="Enter contract title">
-                        </div>
-                        
-                        <div class="transition-all duration-300 focus-within:scale-[1.02]">
-                            <label class="block text-gray-700 font-bold mb-2" for="recipient_email" id="recipient_email-label">
-                                Recipient Email
-                            </label>
-                            <input class="w-full px-4 py-3 rounded-lg border border-gray-400 bg-purple-200 focus:border-blue-600 focus:ring-2 focus:ring-blue-300 transition-all duration-300 placeholder-black" 
-                                   id="recipient_email" type="email" required aria-labelledby="recipient_email-label" placeholder="Enter recipient's email">
-                        </div>
-                        
-                        <div class="transition-all duration-300 focus-within:scale-[1.02]">
-                            <label class="block text-gray-700 font-bold mb-2" for="content" id="content-label">
-                                Contract Content
-                            </label>
-                            <div class="flex relative" id="content-container">
-                                <div class="min-w-[200px]" id="editor-container" style="width: 50%;">
-                                    <textarea class="w-full h-full px-4 py-3 rounded-lg border border-gray-400 bg-purple-200 focus:border-blue-600 focus:ring-2 focus:ring-blue-300 transition-all duration-300 placeholder-black" 
-                                             id="content" rows="10" required aria-labelledby="content-label" 
-                                             placeholder="Enter contract content"></textarea>
-                                </div>
-                                
-                                <!-- Resizer -->
-                                <div id="resizer" class="w-2 cursor-col-resize hover:bg-purple-400 active:bg-purple-600 transition-colors"></div>
-                                
-                                <div class="flex-1 min-w-[200px]">
-                                    <div class="h-full px-4 py-3 rounded-lg border border-gray-400 bg-white overflow-y-auto markdown-content" 
-                                         id="content-preview">
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="flex justify-end">
-                            <button type="submit" 
-                                    aria-label="Create Contract"
-                                    class="bg-blue-700 hover:bg-blue-800 text-white font-bold py-3 px-6 rounded-lg hover:shadow-lg transform hover:scale-105 transition-all duration-300">
-                                Create Contract
-                            </button>
-                        </div>
-                    </form>
-                </div>
-
-                <!-- Upload PDF Form -->
-                <div id="upload-form" class="hidden transition-all duration-300">
-                    <form id="pdf-upload-form" class="space-y-6" role="form" aria-label="Upload PDF Form">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        
-                        <div class="transition-all duration-300 focus-within:scale-[1.02]">
-                            <label class="block text-gray-700 font-bold mb-2" for="pdf-title">
-                                Document Title
-                            </label>
-                            <input class="w-full px-4 py-3 rounded-lg border border-gray-400 bg-purple-200 focus:border-blue-600 focus:ring-2 focus:ring-blue-300 transition-all duration-300 placeholder-black" 
-                                   id="pdf-title" type="text" required placeholder="Enter document title">
-                        </div>
-                        
-                        <div class="transition-all duration-300 focus-within:scale-[1.02]">
-                            <label class="block text-gray-700 font-bold mb-2" for="pdf-recipient-email">
-                                Recipient Email
-                            </label>
-                            <input class="w-full px-4 py-3 rounded-lg border border-gray-400 bg-purple-200 focus:border-blue-600 focus:ring-2 focus:ring-blue-300 transition-all duration-300 placeholder-black" 
-                                   id="pdf-recipient-email" type="email" required placeholder="Enter recipient's email">
-                        </div>
-                        
-                        <div class="transition-all duration-300 focus-within:scale-[1.02]">
-                            <label class="block text-gray-700 font-bold mb-2" for="pdf-file">
-                                Upload PDF Document
-                            </label>
-                            <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-purple-500 transition-colors">
-                                <input type="file" id="pdf-file" accept=".pdf" class="hidden" required>
-                                <div class="cursor-pointer" onclick="document.getElementById('pdf-file').click()">
-                                    <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
-                                        <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                                    </svg>
-                                    <p class="mt-1 text-sm text-gray-600">Click to upload or drag and drop</p>
-                                    <p class="mt-1 text-xs text-gray-500">PDF files only</p>
-                                </div>
-                                <div id="file-name" class="mt-2 text-sm text-gray-600"></div>
-                            </div>
-                        </div>
-                        
-                        <div class="flex justify-end">
-                            <button type="submit" 
-                                    class="bg-blue-700 hover:bg-blue-800 text-white font-bold py-3 px-6 rounded-lg hover:shadow-lg transform hover:scale-105 transition-all duration-300">
-                                Upload and Create
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div id="loading" class="hidden text-center" role="alert" aria-live="polite">
-        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-700 mx-auto"></div>
-        <p class="text-gray-900 mt-2">Processing signature...</p>
-    </div>
-
-    <!-- Add AI Modal -->
-    <div id="ai-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full backdrop-blur-sm">
-        <div class="relative top-20 mx-auto p-6 border w-[900px] shadow-2xl rounded-xl bg-white">
-            <div class="mt-2">
-                <div class="flex items-center justify-between mb-6">
-                    <h3 class="text-2xl font-semibold text-gray-800">AI Contract Generator</h3>
-                    <button id="close-modal" class="text-gray-500 hover:text-gray-700 transition-colors">
-                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                        </svg>
-                    </button>
-                </div>
+                </form>
                 
-                <!-- Split view container with enhanced styling -->
-                <div class="flex gap-6">
-                    <!-- Chat input section -->
-                    <div class="w-1/2 bg-purple-50 rounded-xl p-5">
-                        <div class="mb-4">
-                            <div class="flex items-center gap-2 mb-3">
-                                <svg class="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                                </svg>
-                                <p class="text-sm font-medium text-black">
-                                    Describe Your Contract
-                                </p>
-                            </div>
-                            <textarea id="ai-prompt" 
-                                     class="w-full px-4 py-3 text-gray-700 border border-purple-200 rounded-xl focus:ring-2 focus:ring-purple-400 focus:border-purple-400 transition-all duration-300 resize-none bg-purple-100 placeholder-black"
-                                     rows="6"
-                                     placeholder="Example: I need a freelance web development contract that includes:
-- Project scope and deliverables
-- Payment terms with milestones
-- Timeline and deadlines
-- Intellectual property rights"></textarea>
-                        </div>
-                        <div class="flex justify-end">
-                            <button id="generate-contract"
-                                    class="px-6 py-3 bg-purple-700 text-white font-medium rounded-xl shadow-lg hover:bg-purple-800 focus:ring-2 focus:ring-purple-400 focus:ring-offset-2 transform hover:scale-105 transition-all duration-300 flex items-center gap-2">
-                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                                </svg>
-                                Generate Contract
-                            </button>
-                        </div>
+                <!-- Upload PDF Form -->
+                <form id="uploadForm" class="space-y-6 hidden">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Contract Title</label>
+                        <input type="text" name="title" required
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500">
                     </div>
 
-                    <!-- Chat history section -->
-                    <div class="w-1/2 border-l border-gray-200 pl-6">
-                        <div class="flex items-center gap-2 mb-4">
-                            <svg class="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
-                            </svg>
-                            <h4 class="text-sm font-semibold text-black">Conversation History</h4>
-                        </div>
-                        <div id="chat-history" 
-                             class="h-[450px] overflow-y-auto space-y-4 pr-4 custom-scrollbar">
-                            <!-- Chat messages will be inserted here -->
-                        </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Recipient Email</label>
+                        <input type="email" name="recipient_email" required
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500">
                     </div>
-                </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">PDF File</label>
+                        <input type="file" name="pdf_file" required accept=".pdf"
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    </div>
+
+                    <div class="flex justify-end space-x-4">
+                        <button type="button" onclick="window.location.href='/'"
+                                class="px-4 py-2 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300">
+                            Cancel
+                        </button>
+                        <button type="submit"
+                                class="px-4 py-2 text-white bg-indigo-600 rounded-md hover:bg-indigo-700">
+                            Send Agreement
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
 
     <script>
-        let chatMessages = [];  // Store chat messages in memory
-
-        document.addEventListener('load', async () => {
-            try {
-                await fetch('/api/clear-chat', {
-                    method: 'POST',
-                    headers: {
-                        'X-CSRF-Token': document.querySelector('input[name="csrf_token"]').value
-                    }
-                });
-                chatMessages = [];  // Clear the messages array
-                document.getElementById('chat-history').innerHTML = '';  // Clear the display
-            } catch (error) {
-                console.error('Error clearing chat history:', error);
-            }
+        // Toggle between forms
+        document.getElementById('createByContentBtn').addEventListener('click', function() {
+            document.getElementById('contentForm').classList.remove('hidden');
+            document.getElementById('uploadForm').classList.add('hidden');
+            document.getElementById('createByContentBtn').classList.replace('bg-gray-200', 'bg-indigo-600');
+            document.getElementById('createByContentBtn').classList.replace('text-gray-700', 'text-white');
+            document.getElementById('createByContentBtn').classList.replace('hover:bg-gray-300', 'hover:bg-indigo-700');
+            document.getElementById('createByUploadBtn').classList.replace('bg-indigo-600', 'bg-gray-200');
+            document.getElementById('createByUploadBtn').classList.replace('text-white', 'text-gray-700');
+            document.getElementById('createByUploadBtn').classList.replace('hover:bg-indigo-700', 'hover:bg-gray-300');
         });
-
-        document.getElementById('contract-form').addEventListener('submit', async (e) => {
+        
+        document.getElementById('createByUploadBtn').addEventListener('click', function() {
+            document.getElementById('contentForm').classList.add('hidden');
+            document.getElementById('uploadForm').classList.remove('hidden');
+            document.getElementById('createByUploadBtn').classList.replace('bg-gray-200', 'bg-indigo-600');
+            document.getElementById('createByUploadBtn').classList.replace('text-gray-700', 'text-white');
+            document.getElementById('createByUploadBtn').classList.replace('hover:bg-gray-300', 'hover:bg-indigo-700');
+            document.getElementById('createByContentBtn').classList.replace('bg-indigo-600', 'bg-gray-200');
+            document.getElementById('createByContentBtn').classList.replace('text-white', 'text-gray-700');
+            document.getElementById('createByContentBtn').classList.replace('hover:bg-indigo-700', 'hover:bg-gray-300');
+        });
+        
+        // Handle content form submission
+        document.getElementById('contentForm').addEventListener('submit', async function(e) {
             e.preventDefault();
-            const button = e.target.querySelector('button[type="submit"]');
-            button.disabled = true;
-            button.innerHTML = '<span class="inline-block animate-spin mr-2">↻</span> Creating...';
+            
+            const formData = new FormData(this);
+            const data = {
+                title: formData.get('title'),
+                recipient_email: formData.get('recipient_email'),
+                content: formData.get('content')
+            };
             
             try {
-                const formData = {
-                    title: document.getElementById('title').value.trim(),
-                    recipient_email: document.getElementById('recipient_email').value.trim(),
-                    content: document.getElementById('content').value.trim()
-                };
-                
-                // Validate data before sending
-                if (!formData.title || !formData.recipient_email || !formData.content) {
-                    throw new Error('All fields are required');
-                }
-                
-                console.log('Sending form data:', formData); // Debug log
-                
-                const response = await fetch('/create-contract', {
+                const response = await fetch('/api/create-agreement', {
                     method: 'POST',
-                    headers: { 
+                    headers: {
                         'Content-Type': 'application/json',
-                        'Accept': 'application/json',
-                        'X-CSRF-Token': document.querySelector('input[name="csrf_token"]').value
+                        'X-CSRF-Token': formData.get('csrf_token')
                     },
-                    body: JSON.stringify(formData),
-                    credentials: 'same-origin'
+                    body: JSON.stringify(data)
                 });
                 
                 const result = await response.json();
-                console.log('Server response:', result); // Debug log
-                
-                if (!response.ok) {
-                    throw new Error(result.message || `HTTP error! status: ${response.status}`);
-                }
                 
                 if (result.success) {
-                    window.location.href = '/pending-agreements';
+                    window.location.href = `/agreement/${result.agreement_id}`;
                 } else {
-                    throw new Error(result.message);
+                    alert(result.message || 'Error creating contract');
                 }
             } catch (error) {
-                console.error('Form submission error:', error); // Debug log
-                showError('Error creating contract: ' + error.message);
-            } finally {
-                button.disabled = false;
-                button.innerHTML = 'Create Contract';
-            }
-        });
-
-        function showError(message) {
-            const errorDiv = document.createElement('div');
-            errorDiv.role = 'alert';
-            errorDiv.className = 'bg-red-100 border-l-4 border-red-700 text-red-900 p-4 mb-4';
-            errorDiv.innerHTML = `
-                <p class="font-bold">Error</p>
-                <p>${message}</p>
-            `;
-            document.getElementById('contract-form').prepend(errorDiv);
-            setTimeout(() => errorDiv.remove(), 5000);
-        }
-
-        // Get DOM elements
-        const aiButton = document.getElementById('ai-draft-button');
-        const aiModal = document.getElementById('ai-modal');
-        const closeModal = document.getElementById('close-modal');
-        const generateButton = document.getElementById('generate-contract');
-        const aiPrompt = document.getElementById('ai-prompt');
-        
-        // Show modal
-        aiButton.addEventListener('click', () => {
-            aiModal.classList.remove('hidden');
-            if (chatMessages.length === 0) {
-                addChatMessage('assistant', 'Hello! I can help you generate a professional contract. Please describe what kind of contract you need.');
-            } else {
-                restoreChatHistory();
+                console.error('Error:', error);
+                alert('Failed to create contract. Please try again.');
             }
         });
         
-        // Hide modal
-        closeModal.addEventListener('click', () => {
-            aiModal.classList.add('hidden');
-        });
-        
-        // Close modal when clicking outside
-        aiModal.addEventListener('click', (e) => {
-            if (e.target === aiModal) {
-                aiModal.classList.add('hidden');
-            }
-        });
-        
-        function addChatMessage(role, content) {
-            const chatHistory = document.getElementById('chat-history');
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `chat-message p-4 rounded-xl ${role === 'user' 
-                ? 'bg-purple-100 border border-purple-200' 
-                : 'bg-gray-100 border border-gray-200'} shadow-sm`;
-            
-            const header = document.createElement('div');
-            header.className = 'flex items-center gap-2 mb-2';
-            
-            const icon = document.createElement('div');
-            icon.className = 'w-6 h-6 rounded-full flex items-center justify-center';
-            if (role === 'user') {
-                icon.className += ' bg-purple-200';
-                icon.innerHTML = `<svg class="w-4 h-4 text-purple-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
-                </svg>`;
-            } else {
-                icon.className += ' bg-gray-200';
-                icon.innerHTML = `<svg class="w-4 h-4 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
-                </svg>`;
-            }
-            
-            const roleLabel = document.createElement('div');
-            roleLabel.className = 'text-sm font-bold text-black';
-            roleLabel.textContent = role === 'user' ? 'You' : 'AI Assistant';
-            
-            header.appendChild(icon);
-            header.appendChild(roleLabel);
-            
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'text-sm text-black whitespace-pre-wrap markdown-content';
-            // Render markdown content
-            contentDiv.innerHTML = marked.parse(content);
-            
-            messageDiv.appendChild(header);
-            messageDiv.appendChild(contentDiv);
-            chatHistory.appendChild(messageDiv);
-            
-            // Store the message in our array
-            chatMessages.push({ role, content });
-            
-            chatHistory.scrollTo({
-                top: chatHistory.scrollHeight,
-                behavior: 'smooth'
-            });
-        }
-
-        // Function to restore chat history
-        function restoreChatHistory() {
-            const chatHistory = document.getElementById('chat-history');
-            chatHistory.innerHTML = '';  // Clear current display
-            chatMessages.forEach(msg => {
-                addChatMessage(msg.role, msg.content);
-            });
-        }
-
-        // Live Markdown preview for content textarea
-        const contentTextarea = document.getElementById('content');
-        const contentPreview = document.getElementById('content-preview');
-
-        contentTextarea.addEventListener('input', function() {
-            contentPreview.innerHTML = marked.parse(this.value);
-        });
-
-        // Modify the existing generate button click handler to update preview
-        generateButton.addEventListener('click', async () => {
-            const prompt = aiPrompt.value.trim();
-            if (!prompt) {
-                alert('Please enter a description of the contract you want to generate.');
-                return;
-            }
-            
-            generateButton.disabled = true;
-            generateButton.innerHTML = '<span class="inline-block animate-spin mr-2">↻</span> Generating...';
-            
-            addChatMessage('user', prompt);
-            
-            try {
-                const response = await fetch('/api/generate-contract', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRF-Token': document.querySelector('input[name="csrf_token"]').value
-                    },
-                    body: JSON.stringify({ prompt })
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    const formattedResponse = `### Generated Contract: ${data.title}
-
-${data.content}`;
-                    
-                    addChatMessage('assistant', formattedResponse);
-                    
-                    // Update form fields and preview
-                    document.getElementById('title').value = data.title;
-                    document.getElementById('content').value = data.content;
-                    contentPreview.innerHTML = marked.parse(data.content);
-                } else {
-                    throw new Error(data.message);
-                }
-            } catch (error) {
-                addChatMessage('assistant', `**Error:** ${error.message}`);
-                alert('Error generating contract: ' + error.message);
-            } finally {
-                generateButton.disabled = false;
-                generateButton.innerHTML = 'Generate Contract';
-                aiPrompt.value = '';
-            }
-        });
-
-        const resizer = document.getElementById('resizer');
-        const editorContainer = document.getElementById('editor-container');
-        const contentContainer = document.getElementById('content-container');
-        
-        let isResizing = false;
-        let startX;
-        let startWidth;
-        
-        resizer.addEventListener('mousedown', initResize);
-        
-        function initResize(e) {
-            isResizing = true;
-            startX = e.clientX;
-            startWidth = editorContainer.offsetWidth;
-            
-            // Add event listeners
-            document.addEventListener('mousemove', resize);
-            document.addEventListener('mouseup', stopResize);
-            
-            // Add resizing class to prevent text selection while resizing
-            document.body.classList.add('resize-active');
-        }
-        
-        function resize(e) {
-            if (!isResizing) return;
-            
-            const containerWidth = contentContainer.offsetWidth;
-            const newWidth = startWidth + (e.clientX - startX);
-            
-            // Limit the minimum and maximum width
-            const minWidth = 200;
-            const maxWidth = containerWidth - 200;
-            
-            if (newWidth >= minWidth && newWidth <= maxWidth) {
-                editorContainer.style.width = `${newWidth}px`;
-            }
-        }
-        
-        function stopResize() {
-            isResizing = false;
-            document.removeEventListener('mousemove', resize);
-            document.removeEventListener('mouseup', stopResize);
-            document.body.classList.remove('resize-active');
-        }
-
-        function cancelAgreement(agreementId) {
-            if (confirm('Are you sure you want to cancel this agreement?')) {
-                fetch(`/api/cancel-agreement/${agreementId}`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRF-Token': document.querySelector('input[name="csrf_token"]').value
-                    },
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        window.location.reload();
-                    } else {
-                        alert('Error cancelling agreement: ' + data.message);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    alert('Error cancelling agreement');
-                });
-            }
-        }
-
-        function switchTab(tab) {
-            const draftTab = document.getElementById('draft-tab');
-            const uploadTab = document.getElementById('upload-tab');
-            const draftForm = document.getElementById('draft-form');
-            const uploadForm = document.getElementById('upload-form');
-            
-            if (tab === 'draft') {
-                draftTab.classList.add('border-purple-600', 'text-purple-600');
-                draftTab.classList.remove('border-transparent', 'text-gray-500');
-                uploadTab.classList.remove('border-purple-600', 'text-purple-600');
-                uploadTab.classList.add('border-transparent', 'text-gray-500');
-                draftForm.classList.remove('hidden');
-                uploadForm.classList.add('hidden');
-            } else {
-                uploadTab.classList.add('border-purple-600', 'text-purple-600');
-                uploadTab.classList.remove('border-transparent', 'text-gray-500');
-                draftTab.classList.remove('border-purple-600', 'text-purple-600');
-                draftTab.classList.add('border-transparent', 'text-gray-500');
-                uploadForm.classList.remove('hidden');
-                draftForm.classList.add('hidden');
-            }
-        }
-
-        // Handle PDF file selection
-        document.getElementById('pdf-file').addEventListener('change', function(e) {
-            const fileName = e.target.files[0]?.name;
-            if (fileName) {
-                document.getElementById('file-name').textContent = fileName;
-            }
-        });
-
-        // Handle PDF form submission
-        document.getElementById('pdf-upload-form').addEventListener('submit', async function(e) {
+        // Handle upload form submission
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
-            const formData = new FormData();
-            formData.append('title', document.getElementById('pdf-title').value);
-            formData.append('recipient_email', document.getElementById('pdf-recipient-email').value);
-            formData.append('pdf_file', document.getElementById('pdf-file').files[0]);
-            formData.append('csrf_token', document.querySelector('input[name="csrf_token"]').value);
+            const formData = new FormData(this);
             
             try {
                 const response = await fetch('/api/upload-agreement', {
                     method: 'POST',
-                    body: formData,
-                    credentials: 'same-origin'
+                    headers: {
+                        'X-CSRF-Token': formData.get('csrf_token')
+                    },
+                    body: formData
                 });
                 
                 const result = await response.json();
                 
                 if (result.success) {
-                    window.location.href = '/pending-agreements';
+                    window.location.href = `/agreement/${result.agreement_id}`;
                 } else {
-                    throw new Error(result.message);
+                    alert(result.message || 'Error uploading PDF');
                 }
             } catch (error) {
-                showError('Error uploading PDF: ' + error.message);
+                console.error('Error:', error);
+                alert('Failed to upload PDF. Please try again.');
             }
         });
     </script>

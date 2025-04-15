@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 import uuid
 import time
+import hashlib
 
 class SupabaseAdapter:
     def __init__(self):
@@ -27,87 +28,11 @@ class SupabaseAdapter:
         # Set the JWT token in the client's auth header
         self.supabase.postgrest.auth(supabase_jwt)
         
-    def store_block(self, block_data: Dict) -> str:
-        """Store a block in the database"""
-        try:
-            # Convert numeric timestamp to datetime
-            timestamp = datetime.utcfromtimestamp(block_data['timestamp']).isoformat()
-            
-            response = self.supabase.table('blocks').insert({
-                'index': block_data['index'],
-                'timestamp': timestamp,  # Now ISO string
-                'transactions': json.dumps(block_data['transactions']),
-                'previous_hash': block_data['previous_hash'],
-                'nonce': block_data['nonce'],
-                'hash': block_data['hash']
-            }).execute()
-            
-            return response.data[0]['id'] if response.data else None
-            
-        except Exception as e:
-            print(f"Error storing block: {str(e)}")
-            print(f"Block data: {block_data}")
-            raise
-        
-    def get_blocks(self):
-        """Get all blocks from the database"""
-        try:
-            response = self.supabase.table('blocks').select('*').order('index').execute()
-            blocks = response.data if response.data else []
-            
-            # Process each block
-            for block in blocks:
-                # Parse transactions JSON string
-                if 'transactions' in block and isinstance(block['transactions'], str):
-                    block['transactions'] = json.loads(block['transactions'])
-                
-                # Convert ISO timestamp to Unix timestamp
-                if 'timestamp' in block and isinstance(block['timestamp'], str):
-                    try:
-                        dt = datetime.fromisoformat(block['timestamp'].replace('Z', '+00:00'))
-                        block['timestamp'] = dt.timestamp()
-                    except (ValueError, TypeError):
-                        block['timestamp'] = time.time()
-                        
-            return blocks
-        except Exception as e:
-            print(f"Error getting blocks: {str(e)}")
-            return []
-        
-    def get_latest_block(self) -> Optional[Dict]:
-        """Get the most recent block"""
-        response = self.supabase.table('blocks').select('*').order('index', desc=True).limit(1).execute()
-        
-        if response.data:
-            block = response.data[0]
-            # Parse ISO timestamp string to datetime, then to timestamp float
-            timestamp = datetime.fromisoformat(block['timestamp']).timestamp()
-            return {
-                'index': block['index'],
-                'timestamp': timestamp,
-                'transactions': json.loads(block['transactions']),
-                'previous_hash': block['previous_hash'],
-                'nonce': block['nonce'],
-                'hash': block['hash']
-            }
-        return None
 
-    def get_pending_transactions(self) -> List[Dict]:
-        """Get all pending transactions"""
-        try:
-            response = self.supabase.table('pending_transactions').select('*').execute()
-            return response.data if response.data else []
-        except Exception as e:
-            print(f"Error getting pending transactions: {str(e)}")
-            return []
-        
-    def clear_pending_transactions(self):
-        """Clear all pending transactions after mining"""
-        # Delete all pending transactions using a true condition
-        self.supabase.table('pending_transactions').delete().gte('created_at', '2000-01-01').execute()
         
     def store_agreement_details(self, agreement_data: Dict) -> str:
         """Store agreement details in the database"""
+        print(f"DEBUG - store_agreement_details called with data: {agreement_data}")
         current_time = datetime.utcnow().isoformat()
         
         try:
@@ -115,21 +40,38 @@ class SupabaseAdapter:
             response = self.supabase.table('agreement_details').select('*').eq('agreement_id', agreement_data['agreement_id']).execute()
             existing = response.data[0] if response.data else None
             
-            # Prepare data for insert/update
+            # Set pdf_source based on how it was created
+            pdf_source = agreement_data.get('pdf_source', 'typed')
+            pdf_path = agreement_data.get('pdf_path', None)
+            
+            # Prepare data for insert/update - make sure column names match the database schema
             agreement_record = {
                 'title': agreement_data['title'],
-                'content': agreement_data.get('content'),
+                'content': agreement_data.get('content', ''),
                 'recipient_email': agreement_data['recipient_email'],
                 'status': agreement_data.get('status', 'pending'),
-                'pdf_path': agreement_data.get('pdf_path'),
+                'pdf_source': pdf_source,
+                'pdf_path': pdf_path,
                 'updated_at': current_time
             }
             
+            # Add created_by field if provided
+            if 'created_by' in agreement_data and agreement_data['created_by']:
+                agreement_record['created_by'] = agreement_data['created_by']
+            
+            # Only include embedding_reference if it exists
+            if 'embedding_reference' in agreement_data and agreement_data['embedding_reference']:
+                agreement_record['embedding_reference'] = agreement_data['embedding_reference']
+            
+            print(f"DEBUG - Final agreement record: {agreement_record}")
+            
             if existing:
+                print(f"DEBUG - Updating existing agreement: {agreement_data['agreement_id']}")
                 response = self.supabase.table('agreement_details').update(
                     agreement_record
                 ).eq('agreement_id', agreement_data['agreement_id']).execute()
             else:
+                print(f"DEBUG - Creating new agreement: {agreement_data['agreement_id']}")
                 agreement_record.update({
                     'agreement_id': agreement_data['agreement_id'],
                     'created_at': current_time
@@ -138,27 +80,56 @@ class SupabaseAdapter:
                     agreement_record
                 ).execute()
             
+            print(f"DEBUG - DB response: {response.data if hasattr(response, 'data') else 'No data'}")
             return response.data[0]['id'] if response.data else None
             
         except Exception as e:
-            print(f"Error in store_agreement_details: {str(e)}")
+            print(f"DEBUG - Error in store_agreement_details: {str(e)}")
+            print(f"DEBUG - Error type: {type(e)}")
+            import traceback
+            traceback.print_exc()
             raise
         
     def get_agreement_details(self, agreement_id: str) -> Optional[Dict]:
         """Get agreement details from the database"""
-        response = self.supabase.table('agreement_details').select('*').eq('agreement_id', agreement_id).single().execute()
-        return response.data if response.data else None
+        try:
+            print(f"DEBUG - Fetching agreement with ID: {agreement_id}")
+            # Remove .single() to avoid the error when no rows are found
+            response = self.supabase.table('agreement_details').select('*').eq('agreement_id', agreement_id).execute()
+            
+            print(f"DEBUG - Query response: {response.data}")
+            
+            # If there's data, return the first row
+            if response.data and len(response.data) > 0:
+                return response.data[0]
+            else:
+                print(f"ERROR - No agreement found with ID: {agreement_id}")
+                return None
+            
+        except Exception as e:
+            print(f"ERROR - Error in get_agreement_details: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return None
         
-    def update_agreement_status(self, agreement_id: str, status: str, signature: str = None):
-        """Update agreement status and signature in database"""
+    def update_agreement_status(self, agreement_id: str, status: str, signature: str = None, embedding_reference: str = None) -> None:
+        """Update agreement status, signature, and embedding reference"""
         update_data = {
             'status': status,
-            'updated_at': datetime.now().isoformat()
+            'updated_at': datetime.utcnow().isoformat()
         }
+        
         if signature:
             update_data['signature'] = signature
+            update_data['signed_at'] = datetime.utcnow().isoformat()
         
-        self.supabase.table('agreement_details').update(update_data).eq('agreement_id', agreement_id).execute()
+        if embedding_reference:
+            update_data['embedding_reference'] = embedding_reference
+        
+        self.supabase.table('agreement_details') \
+            .update(update_data) \
+            .eq('agreement_id', agreement_id) \
+            .execute()
         
     def store_pending_transaction(self, transaction: Dict) -> str:
         """Store a pending transaction in the database"""
@@ -192,66 +163,124 @@ class SupabaseAdapter:
 
     def get_agreement(self, agreement_id: str) -> Dict:
         """Get agreement details including signature"""
-        response = self.supabase.table('agreement_details').select(
-            'agreement_id',
-            'title',
-            'content',
-            'recipient_email',
-            'status',
-            'signature',
-            'created_at'
-        ).eq('agreement_id', agreement_id).execute()
-        
-        if response.data:
-            return response.data[0]
-        return None
-
-    def log_audit_event(self, agreement_id: str, action_type: str, actor_email: str, metadata: dict, ip_address: str = None):
-        """Log an audit event with IP address"""
         try:
-            # Ensure metadata is a dict
-            if not isinstance(metadata, dict):
-                metadata = {'data': str(metadata)}
+            print(f"DEBUG - Fetching agreement basic info with ID: {agreement_id}")
+            response = self.supabase.table('agreement_details').select(
+                'agreement_id',
+                'title',
+                'content',
+                'recipient_email',
+                'status',
+                'signature',
+                'created_at'
+            ).eq('agreement_id', agreement_id).execute()
             
-            # Create a copy of metadata to avoid modifying the original
-            event_metadata = metadata.copy()
+            print(f"DEBUG - Get agreement response data: {response.data}")
             
-            # Add IP address to metadata if provided
-            if ip_address:
-                event_metadata['ip_address'] = ip_address
+            if response.data and len(response.data) > 0:
+                return response.data[0]
+            else:
+                print(f"ERROR - No agreement found with ID: {agreement_id}")
+                return None
+        except Exception as e:
+            print(f"ERROR - Error in get_agreement: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def log_audit_event(self, agreement_id: str, action_type: str, actor_email: str, metadata: dict = None, ip_address: str = None):
+        """Log an event in the audit trail"""
+        try:
+            timestamp = datetime.utcnow().isoformat()
             
-            # Always use UTC timestamp
-            current_time = datetime.utcnow().isoformat()
+            # Generate a unique transaction ID if not provided in metadata
+            if not metadata:
+                metadata = {}
             
-            # Add timestamp to metadata
-            event_metadata['timestamp'] = current_time
+            transaction_id = metadata.get('transaction_id')
+            if not transaction_id:
+                # Generate a new transaction ID using agreement_id, action_type, and timestamp
+                transaction_id_raw = f"{agreement_id}:{action_type}:{timestamp}"
+                transaction_id = f"tx_{hashlib.sha256(transaction_id_raw.encode()).hexdigest()[:16]}"
+                metadata['transaction_id'] = transaction_id
             
-            # Create audit log entry with consistent UTC timestamp
+            print(f"DEBUG - Creating audit log for {action_type} on {agreement_id} with transaction ID: {transaction_id}")
+            
+            # Store the event in the audit logs
             response = self.supabase.table('agreement_audit_logs').insert({
                 'agreement_id': agreement_id,
                 'action_type': action_type,
                 'actor_email': actor_email,
-                'metadata': event_metadata,
+                'metadata': metadata,
                 'ip_address': ip_address,
-                'timestamp': current_time  # Use same UTC timestamp
+                'timestamp': timestamp,
+                'transaction_id': transaction_id
             }).execute()
             
-            return response.data[0] if response.data else None
+            if response.data:
+                print(f"DEBUG - Audit log created for {action_type} on {agreement_id} with transaction ID: {transaction_id}")
+                return transaction_id
+            else:
+                print(f"ERROR - Failed to create audit log for {action_type} on {agreement_id}. Response: {response}")
+                return None
             
         except Exception as e:
-            print(f"DEBUG - Error in log_audit_event: {str(e)}")
+            print(f"ERROR - Failed to log audit event: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return None
 
-    def get_agreement_audit_trail(self, agreement_id: str) -> List[Dict]:
-        """Get all audit logs for an agreement ordered by timestamp"""
+    def get_agreement_audit_trail(self, agreement_id: str):
+        """Get the audit trail for an agreement"""
         try:
-            response = self.supabase.table('agreement_audit_logs')\
-                .select('*')\
-                .eq('agreement_id', agreement_id)\
-                .order('timestamp')\
+            print(f"DEBUG - Fetching audit trail for agreement: {agreement_id}")
+            response = self.supabase.table('agreement_audit_logs') \
+                .select('*') \
+                .eq('agreement_id', agreement_id) \
+                .order('timestamp', desc=False) \
                 .execute()
             
-            return response.data if response.data else []
+            print(f"DEBUG - Retrieved {len(response.data) if response.data else 0} audit logs")
+            
+            if not response.data:
+                # Try to create an initial log if none exist
+                print(f"DEBUG - No audit logs found for {agreement_id}, creating a record event")
+                
+                # Get agreement details
+                agreement = self.get_agreement_details(agreement_id)
+                if agreement:
+                    # Create a basic record event
+                    import hashlib
+                    from datetime import datetime
+                    
+                    timestamp = datetime.utcnow().isoformat()
+                    transaction_id = f"tx_{hashlib.sha256(f'{agreement_id}:record:{timestamp}'.encode()).hexdigest()[:16]}"
+                    
+                    self.log_audit_event(
+                        agreement_id=agreement_id,
+                        action_type='record',
+                        actor_email=agreement.get('created_by', agreement.get('recipient_email', 'system')),
+                        metadata={
+                            'message': 'Historical record created',
+                            'status': agreement.get('status', 'unknown'),
+                            'transaction_id': transaction_id,
+                            'recipient_email': agreement.get('recipient_email', 'unknown')
+                        }
+                    )
+                    
+                    # Try fetching again
+                    response = self.supabase.table('agreement_audit_logs') \
+                        .select('*') \
+                        .eq('agreement_id', agreement_id) \
+                        .order('timestamp', desc=False) \
+                        .execute()
+                        
+                    print(f"DEBUG - After creating record, retrieved {len(response.data) if response.data else 0} audit logs")
+            
+            return response.data or []
+            
         except Exception as e:
-            print(f"Error getting audit trail: {str(e)}")
+            print(f"ERROR - Failed to get audit trail: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return []

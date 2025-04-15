@@ -284,6 +284,9 @@ class FaceExtractor:
                 print("Failed to decode image")
                 return None
             
+            # Flip the image horizontally to match the mirroring in the UI
+            image = cv2.flip(image, 1)  # 1 means flip along y-axis (horizontal flip)
+            
             # Convert to grayscale for face detection
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
@@ -356,7 +359,10 @@ class FaceExtractor:
             return None
 
     def _detect_screen_artifacts(self, frame) -> bool:
-        """Enhanced screen artifact detection"""
+        """Enhanced screen artifact detection - with horizontal flip applied"""
+        # First flip the frame horizontally to match our mirrored view
+        frame = cv2.flip(frame, 1)
+        
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
         # 1. Enhanced Moiré pattern detection
@@ -420,6 +426,9 @@ class FaceExtractor:
             # Convert bytes to numpy array
             nparr = np.frombuffer(image_bytes, np.uint8)
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+            # Flip the image horizontally to create a natural mirror effect
+            frame = cv2.flip(frame, 1)  # 1 means flip along y-axis (horizontal flip)
             
             # Convert to grayscale for face detection
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)

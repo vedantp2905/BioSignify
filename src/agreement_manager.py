@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from datetime import datetime
-from src.blockchain import AgreementBlockchain, StorageType
 from src.face_utils import FaceExtractor
 from src.face_comparison import FaceComparer
 from src.vector_store import VectorStore
@@ -10,8 +9,13 @@ from src.email_sender import EmailSender
 import os
 import numpy as np
 import base64
-from typing import Tuple
+from typing import Tuple, List
 import time
+from .audit_manager import AuditManager
+from .database.supabase_adapter import SupabaseAdapter
+from io import BytesIO
+import shutil
+from pathlib import Path
 
 @dataclass
 class Agreement:
@@ -25,88 +29,58 @@ class Agreement:
     requires_id_verification: bool = True  # New field
 
 class AgreementManager:
-    def __init__(self, blockchain_path: str = "data/blockchain.json"):
-        # Use database storage
-        self.blockchain = AgreementBlockchain(storage_type=StorageType.DATABASE)
+    def __init__(self):
+        self._db = SupabaseAdapter()
+        self.audit_manager = AuditManager()
         self.face_extractor = FaceExtractor()
         self.face_comparer = FaceComparer()
         self.vector_store = VectorStore()
         self.pdf_generator = AgreementPDF()
         self.email_sender = EmailSender()
         
+        # Create uploads directory if it doesn't exist
+        self.uploads_dir = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "uploads"
+        self.uploads_dir.mkdir(exist_ok=True)
+        
     @property
     def db(self):
-        return self.blockchain.db
+        return self._db
         
     def create_agreement(self, title: str, content: str, recipient_email: str, client_id: str, ip_address: str = None) -> Agreement:
-        """Create a new agreement with audit logging"""
-        try:
-            # Generate single timestamp with consistent precision
-            current_time = round(time.time(), 6)  # Round to microseconds
-            
-            agreement_data = f"{title}{content}{recipient_email}{current_time}"
-            agreement_id = hashlib.sha512(agreement_data.encode()).hexdigest()[:16]
-
-            # Store reference in blockchain with same timestamp
-            transaction_id = self.blockchain.add_agreement(
-                agreement_id=agreement_id,
-                recipient_email=recipient_email,
-                embedding_reference=None,
-                client_id=client_id,
-                timestamp=current_time  # Pass the same timestamp
-            )
-            
-            # Mine the block and ensure it's stored
-            block = self.blockchain.mine_pending_transactions()
-            if not block:
-                raise Exception("Failed to mine block for agreement")
-            
-            # Store agreement details in database
-            self.db.store_agreement_details({
-                'agreement_id': agreement_id,
-                'title': title,
-                'content': content,
-                'recipient_email': recipient_email,
-                'status': 'pending'
-            })
-            
-            # Generate and send PDF
-            signing_url = f"{os.getenv('SIGNING_BASE_URL', 'http://localhost:5000')}/sign/{agreement_id}"
-            pdf_path = self.pdf_generator.generate_agreement_pdf(
-                agreement_id=agreement_id,
-                title=title,
-                content=content,
-                recipient_email=recipient_email,
-                signing_url=signing_url
-            )
-            
-            try:
-                self.email_sender.send_agreement_email(
-                    recipient_email=recipient_email,
-                    agreement_id=agreement_id,
-                    pdf_path=pdf_path,
-                    signing_url=signing_url
-                )
-            except Exception as e:
-                raise
-            finally:
-                # Clean up PDF file
-                if os.path.exists(pdf_path):
-                    os.remove(pdf_path)
-            
-            return Agreement(
-                id=agreement_id,
-                title=title,
-                content=content,
-                recipient_email=recipient_email,
-                created_at=datetime.fromtimestamp(current_time),
-                face_embedding=None,
-                status="pending"
-            )
-            
-        except Exception as e:
-            print(f"Error creating agreement: {str(e)}")
-            raise
+        """Create a new agreement with manual content"""
+        agreement_id = f"agr_{int(datetime.utcnow().timestamp())}"
+        timestamp = datetime.utcnow().timestamp()
+        
+        # Create agreement in database
+        agreement = Agreement(
+            id=agreement_id,
+            title=title,
+            content=content,
+            recipient_email=recipient_email,
+            created_at=datetime.utcnow(),
+            face_embedding=None
+        )
+        
+        # Store agreement details - without embedding_reference but with created_by
+        self.db.store_agreement_details({
+            'agreement_id': agreement_id,
+            'title': title,
+            'content': content,
+            'recipient_email': recipient_email,
+            'status': 'pending',
+            'created_by': client_id  # Add the creator's email/ID
+        })
+        
+        # Record in audit trail
+        self.audit_manager.add_agreement(
+            agreement_id=agreement_id,
+            recipient_email=recipient_email,
+            embedding_reference=None,  # No embedding at creation
+            client_id=client_id,
+            timestamp=timestamp
+        )
+        
+        return agreement
     
     def verify_signature(self, agreement_id: str, verification_image_path: str, client_id: str, ip_address: str = None) -> tuple[bool, float]:
         """Verify a signature attempt using face comparison with latest client embedding"""
@@ -153,48 +127,92 @@ class AgreementManager:
             raise
     
     def create_and_send_agreement(self, title: str, content: str, recipient_email: str, client_id: str) -> Agreement:
-        """Create and send initial agreement (no face required)"""
-        # Create agreement
-        agreement = self.create_agreement(
-            title=title,
-            content=content,
-            recipient_email=recipient_email,
-            client_id=client_id
-        )
-        
-        # Generate signing URL
-        base_url = os.getenv("SIGNING_BASE_URL", "http://localhost:5000")
-        signing_url = f"{base_url}/sign/{agreement.id}"
-        
-        # Generate PDF
-        pdf_path = self.pdf_generator.generate_agreement_pdf(
-            agreement_id=agreement.id,
-            title=title,
-            content=content,
-            recipient_email=recipient_email,
-            signing_url=signing_url
-        )
-        
-        # Send email
+        """Create and send a new agreement"""
         try:
-            self.email_sender.send_agreement_email(
+            print(f"DEBUG - Creating agreement: {title}")
+            # Create unique ID for agreement
+            agreement_data = f"{title}{recipient_email}{datetime.now().isoformat()}"
+            agreement_id = hashlib.sha512(agreement_data.encode()).hexdigest()[:16]
+            
+            # Generate timestamp for audit trail
+            timestamp = datetime.utcnow().timestamp()
+            
+            # Generate transaction ID for this operation
+            transaction_id = f"tx_{hashlib.sha256(f'{agreement_id}:create:{timestamp}'.encode()).hexdigest()[:16]}"
+            
+            # Generate signing URL
+            base_url = os.getenv("SIGNING_BASE_URL", "http://localhost:5000")
+            signing_url = f"{base_url}/sign/{agreement_id}"
+            
+            # Generate PDF and send email
+            pdf_content = self.pdf_generator.generate_agreement_pdf(
+                agreement_id=agreement_id,
+                title=title,
+                content=content,
                 recipient_email=recipient_email,
-                agreement_id=agreement.id,
-                pdf_path=pdf_path,
                 signing_url=signing_url
             )
-            os.remove(pdf_path)
+            
+            print(f"DEBUG - Sending email for agreement {agreement_id}")
+            # Send email first to ensure it works before creating DB records
+            self.email_sender.send_agreement_email(
+                recipient_email=recipient_email,
+                agreement_id=agreement_id,
+                pdf_content=pdf_content,
+                signing_url=signing_url
+            )
+            print(f"DEBUG - Email sent successfully for agreement {agreement_id}")
+            
+            # Only create DB records after email is sent
+            print(f"DEBUG - Storing agreement {agreement_id} in database")
+            self.db.store_agreement_details({
+                'agreement_id': agreement_id,
+                'title': title,
+                'content': content,
+                'recipient_email': recipient_email,
+                'status': 'pending',
+                'created_by': client_id,
+                'pdf_source': 'typed'
+            })
+            
+            # Record in audit trail with transaction ID
+            print(f"DEBUG - Creating audit log for agreement {agreement_id}")
+            self.db.log_audit_event(
+                agreement_id=agreement_id,
+                action_type='created',
+                actor_email=client_id,
+                metadata={
+                    'recipient_email': recipient_email,
+                    'embedding_reference': None,  # No embedding at creation
+                    'timestamp': timestamp,
+                    'transaction_id': transaction_id,
+                    'title': title
+                }
+            )
+            
+            # Create agreement object
+            agreement = Agreement(
+                id=agreement_id,
+                title=title,
+                content=content,
+                recipient_email=recipient_email,
+                created_at=datetime.utcnow(),
+                face_embedding=None
+            )
+            
+            print(f"DEBUG - Agreement {agreement_id} created successfully")
+            return agreement
+            
         except Exception as e:
-            if os.path.exists(pdf_path):
-                os.remove(pdf_path)
+            print(f"ERROR - Failed to create and send agreement: {str(e)}")
+            import traceback
+            traceback.print_exc()
             raise
-        
-        return agreement
 
     def get_agreement_status(self, agreement_id: str) -> str:
         """Get the current status of an agreement"""
-        # Get agreement from blockchain
-        agreement_data = self.blockchain.get_agreement(agreement_id)
+        # Get agreement from database
+        agreement_data = self.db.get_agreement(agreement_id)
         
         if not agreement_data:
             return "not_found"
@@ -209,245 +227,207 @@ class AgreementManager:
         
         return "unknown" 
 
-    def process_signature(self, agreement_id: str, client_id: str, image_data: str, ip_address: str = None) -> Tuple[bool, str]:
-        """Process signature with audit logging and IP tracking"""
+    def process_signature(self, agreement_id: str, client_id: str, ip_address: str = None) -> Tuple[bool, str]:
+        """Process agreement signature"""
         try:
-            # Get agreement data first
-            agreement_data = self.blockchain.get_agreement(agreement_id)
-            if not agreement_data:
-                self.db.log_audit_event(
-                    agreement_id=agreement_id,
-                    action_type='sign_attempt_failed',
-                    actor_email=client_id,
-                    metadata={'error': 'Agreement not found'},
-                    ip_address=ip_address
-                )
+            # Get agreement details
+            agreement = self.db.get_agreement(agreement_id)
+            if not agreement:
                 return False, "Agreement not found"
             
-            # Use recipient_email as client_id for consistency
-            expected_client_id = agreement_data.get("recipient_email")
+            if agreement['status'] != 'pending':
+                return False, f"Agreement is {agreement['status']}"
             
-            # Verify client_id matches
-            if client_id != expected_client_id:
-                return False, f"Invalid client ID. Expected {expected_client_id}, got {client_id}"
+            timestamp = datetime.utcnow().timestamp()
             
-            # Extract face and get embedding
-            image_bytes = base64.b64decode(image_data.split(',')[1])
-            face = self.face_extractor.extract_face_from_bytes(image_bytes)
-            if face is None:
-                return False, "No face detected in image"
+            # Generate transaction ID for this signature operation
+            transaction_id = f"tx_{hashlib.sha256(f'{agreement_id}:sign:{timestamp}'.encode()).hexdigest()[:16]}"
             
-            embedding = self.face_extractor.get_embedding(face)
-            
-            # Get the latest embedding for this client
+            # Get the latest embedding reference for this client
             original_embedding, embedding_ref = self.vector_store.get_latest_client_embedding(client_id)
             
-            if original_embedding is None:
-                # Check if ID has been verified
-                if not self.vector_store.has_verified_identity(client_id):
-                    return False, "Please complete identity verification first"
-                
-                # First time signing
-                # Add verification metadata for first-time signing
-                self.db.log_audit_event(
-                    agreement_id=agreement_id,
-                    action_type='verification_attempt',
-                    actor_email=client_id,
-                    metadata={
-                        'success': 'true',
-                        'similarity_score': 1.0,
-                        'first_time': True,
-                        'timestamp': datetime.now().isoformat()
-                    },
-                    ip_address=ip_address
-                )
-                
-                embedding_ref = self.vector_store.store_embedding(embedding, client_id, agreement_id)
-                if not embedding_ref:
-                    return False, "Failed to store face embedding"
-                
-                # Use consistent timestamp precision
-                timestamp = round(time.time(), 6)  # Round to microseconds
-                
-                signature = self.generate_signature(
-                    face_embedding=embedding,
-                    agreement_id=agreement_id,
-                    client_id=client_id,
-                    timestamp=timestamp
-                )
-                
-                # Store signature in blockchain with same timestamp
-                self.blockchain.add_signature(
-                    agreement_id=agreement_id,
-                    signature_timestamp=timestamp,
-                    embedding_reference=embedding_ref
-                )
-                
-                # Mine block and update status with signature
-                self.blockchain.mine_pending_transactions()
-                self.db.update_agreement_status(agreement_id, "signed", signature)
-                
-                # Get agreement details and send PDF
-                try:
-                    self._send_signed_pdf(agreement_id, client_id, embedding, signature)
-                except Exception as pdf_error:
-                    print(f"Error generating/sending PDF: {str(pdf_error)}")
-                    # Log error but continue with success response
-                    self.db.log_audit_event(
-                        agreement_id=agreement_id,
-                        action_type='error',
-                        actor_email=client_id,
-                        metadata={
-                            'error_type': 'pdf_generation',
-                            'error_message': str(pdf_error)
-                        },
-                        ip_address=ip_address
-                    )
-                
-                # Log successful first-time signature
-                self.db.log_audit_event(
-                    agreement_id=agreement_id,
-                    action_type='signed',
-                    actor_email=client_id,
-                    metadata={
-                        'signature_timestamp': datetime.now().isoformat(),
-                        'verification_method': 'facial_biometrics',
-                        'first_time_signing': True
-                    },
-                    ip_address=ip_address
-                )
-                
-                return True, "Agreement signed successfully. A copy has been sent to your email."
-                
-            else:
-                # Verify against existing embedding
-                similarity_score, is_same_person = self.face_comparer.compare_face_embeddings(embedding, original_embedding)
-                
-                # Log verification attempt
-                self.db.log_audit_event(
-                    agreement_id=agreement_id,
-                    action_type='verification_attempt',
-                    actor_email=client_id,
-                    metadata={
-                        'success': str(similarity_score >= 0.85),
-                        'similarity_score': float(similarity_score),
-                        'timestamp': datetime.now().isoformat()
-                    },
-                    ip_address=ip_address
-                )
-                
-                if similarity_score < 0.85:
-                    return False, f"Face verification failed (similarity: {similarity_score:.2f})"
-                
-                # Store new embedding and add signature with normalized timestamp
-                new_ref = self.vector_store.store_embedding(embedding, client_id, agreement_id)
-                # Use consistent timestamp precision
-                timestamp = round(time.time(), 6)  # Round to microseconds
-                
-                signature = self.generate_signature(
-                    face_embedding=embedding,
-                    agreement_id=agreement_id,
-                    client_id=client_id,
-                    timestamp=timestamp
-                )
-                
-                self.blockchain.add_signature(
-                    agreement_id=agreement_id,
-                    signature_timestamp=timestamp,
-                    embedding_reference=new_ref
-                )
-                
-                # Mine block and update status
-                self.blockchain.mine_pending_transactions()
-                self.db.update_agreement_status(agreement_id, "signed", signature)
-                
-                # Send signed PDF
-                try:
-                    self._send_signed_pdf(agreement_id, client_id, embedding, signature)
-                except Exception as pdf_error:
-                    print(f"Error generating/sending PDF: {str(pdf_error)}")
-                    self.db.log_audit_event(
-                        agreement_id=agreement_id,
-                        action_type='error',
-                        actor_email=client_id,
-                        metadata={
-                            'error_type': 'pdf_generation',
-                            'error_message': str(pdf_error)
-                        },
-                        ip_address=ip_address
-                    )
-                
-                # Log successful signature
-                self.db.log_audit_event(
-                    agreement_id=agreement_id,
-                    action_type='signed',
-                    actor_email=client_id,
-                    metadata={
-                        'signature_timestamp': datetime.now().isoformat(),
-                        'verification_method': 'facial_biometrics',
-                        'similarity_score': float(similarity_score)
-                    },
-                    ip_address=ip_address
-                )
-                
-                return True, f"Agreement signed successfully (similarity: {similarity_score:.2f})"
-                
-        except Exception as e:
-            # Log error
+            # Generate digital signature
+            signature = hashlib.sha512(
+                f"{agreement_id}:{client_id}:{timestamp}".encode()
+            ).hexdigest()
+            
+            # Update agreement status and store embedding reference
+            self.db.update_agreement_status(
+                agreement_id=agreement_id,
+                status='signed',
+                signature=signature,
+                embedding_reference=embedding_ref
+            )
+            
+            # Log the signature event in audit trail with transaction ID
             self.db.log_audit_event(
                 agreement_id=agreement_id,
-                action_type='error',
+                action_type='signed',
                 actor_email=client_id,
                 metadata={
-                    'error_type': e.__class__.__name__,
-                    'error_message': str(e)
+                    'timestamp': timestamp,
+                    'signature': signature,
+                    'embedding_reference': embedding_ref,
+                    'transaction_id': transaction_id,
+                    'verification_status': '[VERIFIED]' if embedding_ref else 'Standard'
+                },
+                ip_address=ip_address
+            )
+            
+            # Generate and send signed PDFs
+            try:
+                self._send_signed_pdfs(
+                    agreement_id=agreement_id,
+                    client_id=client_id,
+                    signature=signature,
+                    transaction_id=transaction_id
+                )
+            except Exception as e:
+                print(f"Warning - Error sending signed PDFs: {str(e)}")
+                # Continue execution - PDF sending is not critical for signature process
+            
+            return True, transaction_id
+            
+        except Exception as e:
+            print(f"Error processing signature: {str(e)}")
+            error_transaction_id = f"tx_error_{hashlib.sha256(f'{agreement_id}:error:{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:16]}"
+            self.db.log_audit_event(
+                agreement_id=agreement_id,
+                action_type='signature_error',
+                actor_email=client_id,
+                metadata={
+                    'error': str(e),
+                    'timestamp': datetime.utcnow().timestamp(),
+                    'transaction_id': error_transaction_id
                 },
                 ip_address=ip_address
             )
             raise
 
-    def cancel_agreement(self, agreement_id: str, client_id: str, ip_address: str = None) -> Tuple[bool, str]:
-        """Cancel agreement with audit logging"""
+    def _send_signed_pdfs(self, agreement_id: str, client_id: str, signature: str, transaction_id: str = None):
+        """Generate and send signed PDFs to both parties"""
         try:
-            # Get agreement data
-            agreement_data = self.blockchain.get_agreement(agreement_id)
+            # Get agreement details
+            agreement_data = self.db.get_agreement_details(agreement_id)
             if not agreement_data:
-                return False, "Agreement not found"
+                raise Exception("Agreement not found")
             
-            # Get agreement details for PDF cleanup
-            details = self.db.get_agreement_details(agreement_id)
+            # Format signature text with proper line breaks
+            signature_text = f"""Digital Signature:
+{signature}
+
+SIGNED
+
+Agreement ID: {agreement_id}
+Transaction ID: {transaction_id or 'N/A'}
+Date: {datetime.now().strftime('%Y-%m-%d')}
+Signed by: {client_id}
+[VERIFIED] Validated by facial biometrics"""
             
-            # Verify client has permission to cancel
-            if client_id != agreement_data.get("recipient_email"):
-                return False, "Not authorized to cancel this agreement"
+            # Generate signed PDF based on source type
+            if agreement_data.get('pdf_source') == 'uploaded' and agreement_data.get('pdf_path'):
+                # Use the stored PDF file
+                pdf_path = agreement_data.get('pdf_path')
+                print(f"DEBUG - Using uploaded PDF from: {pdf_path}")
+                
+                if os.path.exists(pdf_path):
+                    with open(pdf_path, 'rb') as f:
+                        original_pdf = BytesIO(f.read())
+                    
+                    signed_pdf = self.pdf_generator.append_signature_page(
+                        original_pdf_bytes=original_pdf,
+                        agreement_id=agreement_id,
+                        signature_text=signature_text
+                    )
+                else:
+                    print(f"DEBUG - PDF file not found at: {pdf_path}")
+                    # Fallback to generating a new PDF if file is missing
+                    signed_pdf = self.pdf_generator.generate_signed_pdf(
+                        agreement_id=agreement_id,
+                        title=agreement_data['title'],
+                        content="Original PDF file was not found. This is a replacement document.",
+                        recipient_email=client_id,
+                        signature_text=signature_text
+                    )
+            else:
+                # For drafted agreements with content
+                signed_pdf = self.pdf_generator.generate_signed_pdf(
+                    agreement_id=agreement_id,
+                    title=agreement_data['title'],
+                    content=agreement_data['content'],
+                    recipient_email=client_id,
+                    signature_text=signature_text
+                )
             
-            # Add cancellation to blockchain
-            self.blockchain.add_cancellation(agreement_id, client_id, round(time.time(), 6))
-            self.blockchain.mine_pending_transactions()
-            
-            # Update status in database
-            self.db.cancel_agreement(agreement_id)
-            
-            # Clean up PDF if it exists
-            if details and details.get('pdf_path') and os.path.exists(details['pdf_path']):
-                os.remove(details['pdf_path'])
-            
-            # Log cancellation with IP address
-            self.db.log_audit_event(
+            # Send to signer (client)
+            self.email_sender.send_signed_agreement_email(
+                recipient_email=client_id,
                 agreement_id=agreement_id,
-                action_type='cancelled',
-                actor_email=client_id,
-                metadata={
-                    'cancellation_timestamp': datetime.now().isoformat(),
-                    'reason': 'user_requested'
-                },
-                ip_address=ip_address
+                pdf_content=signed_pdf,
+                signature=signature,
+                transaction_id=transaction_id
             )
             
-            return True, "Agreement cancelled successfully"
+            # Send to creator
+            creator_email = agreement_data.get('created_by', agreement_data.get('sender_email'))
+            if creator_email and creator_email != client_id:
+                signed_pdf.seek(0)  # Reset buffer position
+                self.email_sender.send_signed_agreement_email(
+                    recipient_email=creator_email,
+                    agreement_id=agreement_id,
+                    pdf_content=signed_pdf,
+                    signature=signature,
+                    transaction_id=transaction_id
+                )
+            
+            # Log PDF sent event
+            pdf_sent_transaction_id = f"tx_{hashlib.sha256(f'{agreement_id}:pdf_sent:{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:16]}"
+            self.db.log_audit_event(
+                agreement_id=agreement_id,
+                action_type='pdf_sent',
+                actor_email=client_id,
+                metadata={
+                    'timestamp': datetime.utcnow().timestamp(),
+                    'sent_to': [client_id, creator_email] if creator_email and creator_email != client_id else [client_id],
+                    'transaction_id': pdf_sent_transaction_id,
+                    'parent_transaction_id': transaction_id
+                },
+                ip_address=None
+            )
             
         except Exception as e:
-            return False, f"Error cancelling agreement: {str(e)}"
+            print(f"Error sending signed PDFs: {str(e)}")
+            raise
+
+    def cancel_agreement(self, agreement_id: str, client_id: str, ip_address: str = None) -> Tuple[bool, str]:
+        """Cancel an agreement"""
+        agreement = self.db.get_agreement(agreement_id)
+        if not agreement:
+            return False, "Agreement not found"
+            
+        if agreement['status'] != 'pending':
+            return False, f"Agreement is already {agreement['status']}"
+            
+        timestamp = datetime.utcnow().timestamp()
+        
+        # Record cancellation in audit trail
+        transaction_id = self.audit_manager.add_cancellation(
+            agreement_id=agreement_id,
+            cancelled_by=client_id,
+            timestamp=timestamp
+        )
+        
+        # Update agreement status
+        self.db.update_agreement_status(
+            agreement_id=agreement_id,
+            status='cancelled'
+        )
+        
+        return True, "Agreement cancelled successfully"
+
+    def verify_agreement(self, agreement_id: str) -> dict:
+        """Verify agreement integrity"""
+        return self.audit_manager.verify_agreement(agreement_id)
 
     def generate_signature(self, face_embedding: np.ndarray, agreement_id: str, client_id: str, timestamp: float) -> str:
         """Generate a cryptographic signature from face embedding and metadata"""
@@ -462,110 +442,82 @@ class AgreementManager:
         signature = hashlib.sha512(signature_data.encode()).hexdigest()
         return signature
 
-    def _send_signed_pdf(self, agreement_id: str, client_id: str, embedding: np.ndarray, signature: str):
-        """Generate and send signed PDF to the client"""
-        signed_pdf_path = None
-        try:
-            # Get agreement details
-            agreement_data = self.db.get_agreement_details(agreement_id)
-            if not agreement_data:
-                raise Exception("Agreement not found")
-            
-            # Check if this is an uploaded PDF
-            if agreement_data.get('pdf_path'):
-                original_pdf_path = agreement_data['pdf_path']
-                if not os.path.exists(original_pdf_path):
-                    raise Exception(f"Original PDF not found at: {original_pdf_path}")
-                    
-                # Append signature page to uploaded PDF
-                signed_pdf_path = self.pdf_generator.append_signature_page(
-                    original_pdf_path=original_pdf_path,
-                    agreement_id=agreement_id,
-                    signature=signature
-                )
-            else:
-                # Generate new PDF for drafted agreement
-                signed_pdf_path = self.pdf_generator.generate_signed_pdf(
-                    agreement_id=agreement_id,
-                    title=agreement_data['title'],
-                    content=agreement_data['content'],
-                    recipient_email=client_id,
-                    signature=signature
-                )
-            
-            # Send email with signed PDF
-            try:
-                self.email_sender.send_signed_agreement_email(
-                    recipient_email=client_id,
-                    agreement_id=agreement_id,
-                    pdf_path=signed_pdf_path,
-                    signature=signature
-                )
-                
-                # Clean up original PDF after successful sending
-                if agreement_data.get('pdf_path') and os.path.exists(agreement_data['pdf_path']):
-                    os.remove(agreement_data['pdf_path'])
-                    
-            except Exception as e:
-                print(f"Error sending signed agreement email: {str(e)}")
-                raise
-            
-        except Exception as e:
-            print(f"Error in _send_signed_pdf: {str(e)}")
-            raise
-        
-        finally:
-            # Clean up signed PDF
-            if signed_pdf_path and os.path.exists(signed_pdf_path):
-                os.remove(signed_pdf_path)
-
     def create_agreement_from_pdf(self, title: str, recipient_email: str, pdf_file, client_id: str, ip_address: str = None) -> Agreement:
         """Create a new agreement from an uploaded PDF file"""
-        temp_pdf_path = None
         try:
-            
             # Create unique ID for agreement
             agreement_data = f"{title}{recipient_email}{datetime.now().isoformat()}"
             agreement_id = hashlib.sha512(agreement_data.encode()).hexdigest()[:16]
             
-            # Save PDF in persistent temp directory with unique name
-            temp_pdf_path = os.path.join('temp_agreements', f"upload_{agreement_id}.pdf")
-            os.makedirs('temp_agreements', exist_ok=True)
-            pdf_file.save(temp_pdf_path)
+            # Create uploads directory if it doesn't exist
+            uploads_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads")
+            os.makedirs(uploads_dir, exist_ok=True)
             
-            # Store reference in blockchain
-            transaction_id = self.blockchain.add_agreement(
-                agreement_id=agreement_id,
-                recipient_email=recipient_email,
-                embedding_reference=None,
-                client_id=client_id,
-                timestamp=round(time.time(), 6)
-            )
+            # Create file path for storing the PDF
+            pdf_filename = f"{agreement_id}.pdf"
+            pdf_path = os.path.join(uploads_dir, pdf_filename)
             
-            # Mine the block
-            block = self.blockchain.mine_pending_transactions()
-            if not block:
-                raise Exception("Failed to mine block for agreement")
+            print(f"DEBUG - Saving uploaded PDF to: {pdf_path}")
+            print(f"DEBUG - Uploads directory: {uploads_dir}")
             
-            # Store agreement details with empty string for content
-            self.db.store_agreement_details({
+            # Handle different types of input and save to file
+            if isinstance(pdf_file, BytesIO):
+                # Already a BytesIO object
+                pdf_file.seek(0)
+                with open(pdf_path, 'wb') as f:
+                    f.write(pdf_file.read())
+            elif hasattr(pdf_file, 'read') and hasattr(pdf_file, 'save'):
+                # File-like object from Flask's request.files with save method
+                pdf_file.save(pdf_path)
+            elif hasattr(pdf_file, 'read'):
+                # File-like object without save method
+                with open(pdf_path, 'wb') as f:
+                    f.write(pdf_file.read())
+            elif isinstance(pdf_file, bytes):
+                # Raw bytes
+                with open(pdf_path, 'wb') as f:
+                    f.write(pdf_file)
+            elif isinstance(pdf_file, str):
+                # Check if it's a file path or base64 string
+                if os.path.isfile(pdf_file):
+                    shutil.copy2(pdf_file, pdf_path)
+                else:
+                    # Assume it's base64 encoded
+                    import base64
+                    try:
+                        with open(pdf_path, 'wb') as f:
+                            f.write(base64.b64decode(pdf_file))
+                    except:
+                        raise ValueError("Invalid PDF data: not a valid file path or base64 string")
+            else:
+                raise ValueError(f"Unsupported PDF file type: {type(pdf_file)}")
+            
+            print(f"DEBUG - PDF saved successfully to: {pdf_path}")
+            
+            # Store agreement details with pdf_source and pdf_path
+            stored_id = self.db.store_agreement_details({
                 'agreement_id': agreement_id,
                 'title': title,
                 'content': '',  # Empty string for uploaded PDFs
                 'recipient_email': recipient_email,
                 'status': 'pending',
-                'pdf_path': temp_pdf_path
+                'created_by': client_id,
+                'pdf_source': 'uploaded',
+                'pdf_path': pdf_path
             })
+            
+            if not stored_id:
+                raise Exception("Failed to store agreement details in database")
             
             # Generate signing URL
             base_url = os.getenv("SIGNING_BASE_URL", "http://localhost:5000")
             signing_url = f"{base_url}/sign/{agreement_id}"
             
-            # Send email with original PDF
+            # Send email
             self.email_sender.send_agreement_email(
                 recipient_email=recipient_email,
                 agreement_id=agreement_id,
-                pdf_path=temp_pdf_path,
+                pdf_content=pdf_file,  # Pass the BytesIO object directly
                 signing_url=signing_url
             )
             
@@ -586,7 +538,7 @@ class AgreementManager:
             return Agreement(
                 id=agreement_id,
                 title=title,
-                content='',  # Changed from None to empty string
+                content='',
                 recipient_email=recipient_email,
                 created_at=datetime.now(),
                 face_embedding=None,
@@ -594,12 +546,11 @@ class AgreementManager:
             )
             
         except Exception as e:
-            # Only clean up PDF on error
-            if temp_pdf_path and os.path.exists(temp_pdf_path):
-                try:
-                    os.remove(temp_pdf_path)
-                except Exception as cleanup_error:
-                    print(f"Error cleaning up PDF: {str(cleanup_error)}")
+            print(f"Error creating agreement from PDF: {str(e)}")
+            # Log the exception type and traceback for debugging
+            import traceback
+            print(f"Exception type: {type(e).__name__}")
+            traceback.print_exc()
             raise
 
     def verify_id_and_face(self, agreement_id: str, id_image: str, selfie_image: str, client_id: str, ip_address: str = None) -> Tuple[bool, str]:

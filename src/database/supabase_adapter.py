@@ -14,6 +14,7 @@ import base64
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.backends import default_backend
+from src.utils.timezone_utils import chicago_now, format_chicago_datetime, parse_iso_to_chicago
 
 class SupabaseAdapter:
     def __init__(self):
@@ -86,7 +87,7 @@ class SupabaseAdapter:
         """Store agreement details in the database"""
         print(f"DEBUG - store_agreement_details called with data: {agreement_data}")
         print(f"DEBUG - Organization ID: {agreement_data.get('organization_id')}")
-        current_time = datetime.utcnow().isoformat()
+        current_time = chicago_now().isoformat()
         
         try:
             # Check if agreement already exists
@@ -174,12 +175,12 @@ class SupabaseAdapter:
         """Update agreement status, signature, embedding reference, and signed PDF path"""
         update_data = {
             'status': status,
-            'updated_at': datetime.utcnow().isoformat()
+            'updated_at': chicago_now().isoformat()
         }
         
         if signature:
             update_data['signature'] = signature
-            update_data['signed_at'] = datetime.utcnow().isoformat()
+            update_data['signed_at'] = chicago_now().isoformat()
         
         if embedding_reference:
             update_data['embedding_reference'] = embedding_reference
@@ -196,7 +197,7 @@ class SupabaseAdapter:
         """Store a pending transaction in the database"""
         try:
             # Always use UTC ISO format
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = chicago_now().isoformat()
             
             transaction_data = {
                 'transaction_id': str(transaction['id']),
@@ -219,7 +220,7 @@ class SupabaseAdapter:
         """Mark agreement as cancelled in database"""
         self.supabase.table('agreement_details').update({
             'status': 'cancelled',
-            'updated_at': datetime.now().isoformat()
+            'updated_at': chicago_now().isoformat()
         }).eq('agreement_id', agreement_id).execute()
 
     def get_agreement(self, agreement_id: str) -> Dict:
@@ -246,7 +247,7 @@ class SupabaseAdapter:
     def log_audit_event(self, agreement_id: str, action_type: str, actor_email: str, metadata: dict = None, ip_address: str = None):
         """Log an event in the audit trail"""
         try:
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = chicago_now().isoformat()
             
             # Generate a unique transaction ID if not provided in metadata
             if not metadata:
@@ -345,7 +346,9 @@ class SupabaseAdapter:
         try:
             response = self.supabase.table('organizations').insert({
                 'name': name,
-                'email': email
+                'email': email,
+                'created_at': chicago_now().isoformat(),
+                'updated_at': chicago_now().isoformat()
             }).execute()
             return response.data[0] if response.data else None
         except Exception as e:
@@ -359,7 +362,9 @@ class SupabaseAdapter:
                 'organization_id': organization_id,
                 'email': email,
                 'role': role,
-                'status': status
+                'status': status,
+                'created_at': chicago_now().isoformat(),
+                'updated_at': chicago_now().isoformat()
             }
             
             # Add password hash if provided
@@ -412,7 +417,10 @@ class SupabaseAdapter:
         """Update user's password"""
         try:
             response = self.supabase.table('organization_users')\
-                .update({'password_hash': new_password_hash})\
+                .update({
+                    'password_hash': new_password_hash,
+                    'updated_at': chicago_now().isoformat()
+                })\
                 .eq('email', email)\
                 .execute()
             return bool(response.data)
@@ -517,6 +525,9 @@ class SupabaseAdapter:
     def update_organization(self, org_id: str, data: dict) -> dict:
         """Update organization details"""
         try:
+            # Add updated_at timestamp
+            data['updated_at'] = chicago_now().isoformat()
+            
             response = self.supabase.table('organizations')\
                 .update(data)\
                 .eq('id', org_id)\
@@ -530,13 +541,15 @@ class SupabaseAdapter:
         """Create an invitation token for a new user"""
         try:
             print(f"DEBUG - Creating invitation token for {email} in org {organization_id}")
-            expiry = datetime.utcnow() + timedelta(days=7)
+            created_at = chicago_now()
+            expiry = created_at + timedelta(days=7)
             
             # Create the invitation record
             invitation_data = {
                 'email': email,
                 'organization_id': organization_id,
                 'token': token,
+                'created_at': created_at.isoformat(),
                 'expires_at': expiry.isoformat()
             }
             
@@ -561,7 +574,7 @@ class SupabaseAdapter:
     def verify_invitation_token(self, token: str) -> dict:
         """Verify an invitation token"""
         try:
-            print(f"Verifying token: {token}")  # Debug log
+            print(f"Verifying token: {token}")
             
             # Get the invitation
             response = self.supabase.table('user_invitations') \
@@ -569,14 +582,19 @@ class SupabaseAdapter:
                 .eq('token', token) \
                 .execute()
                 
-            print(f"Query response: {response.data}")  # Debug log
-            
             if not response.data:
-                print("No invitation found with this token")  # Debug log
+                print("No invitation found with this token")
                 return None
-                
-            # Return the first invitation found
-            return response.data[0]
+            
+            invitation = response.data[0]
+            
+            # Check if token has expired
+            expires_at = parse_iso_to_chicago(invitation['expires_at'])
+            if expires_at < chicago_now():
+                print("Token has expired")
+                return None
+            
+            return invitation
             
         except Exception as e:
             print(f"Error verifying invitation token: {str(e)}")
@@ -595,6 +613,7 @@ class SupabaseAdapter:
                 print("Failed to verify invitation token")
                 return False
                 
+            current_time = chicago_now().isoformat()
             email = invitation['email']
             organization_id = invitation['organization_id']
             print(f"Found invitation for email: {email}")
@@ -614,7 +633,9 @@ class SupabaseAdapter:
                         'organization_id': organization_id,
                         'password_hash': password_hash,
                         'status': 'active',
-                        'role': 'user'
+                        'role': 'user',
+                        'created_at': current_time,
+                        'updated_at': current_time
                     }) \
                     .execute()
                     
@@ -627,7 +648,8 @@ class SupabaseAdapter:
                 update_response = self.supabase.table('organization_users') \
                     .update({
                         'status': 'active',
-                        'password_hash': password_hash
+                        'password_hash': password_hash,
+                        'updated_at': current_time
                     }) \
                     .eq('email', email) \
                     .execute()

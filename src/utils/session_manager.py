@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 import jwt
 from typing import Optional
 import os
+from src.utils.timezone_utils import chicago_now
 
 class SessionManager:
     def __init__(self):
@@ -15,8 +16,8 @@ class SessionManager:
             'email': email,
             'organization_id': organization_id,
             'role': role,
-            'exp': datetime.utcnow() + self.session_duration,
-            'iat': datetime.utcnow()
+            'exp': chicago_now() + self.session_duration,
+            'iat': chicago_now()
         }
         return jwt.encode(payload, self.secret_key, algorithm='HS256')
     

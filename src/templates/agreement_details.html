@@ -43,7 +43,7 @@
 
                 <div>
                     <h2 class="text-lg font-semibold text-gray-700">Created At</h2>
-                    <p class="text-gray-800 mt-1">{{ agreement.created_at.strftime('%B %d, %Y %I:%M %p') }}</p>
+                    <span>{{ format_chicago_datetime(agreement.created_at) }}</span>
                 </div>
 
                 <div>
@@ -143,15 +143,20 @@
     }
 
     function formatDate(dateString) {
+        // Create a date object from the ISO string
         const date = new Date(dateString);
-        return date.toLocaleString('en-US', {
+        
+        // Format the date in Chicago time
+        return new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/Chicago',
             year: 'numeric',
             month: 'long',
             day: 'numeric',
             hour: 'numeric',
             minute: 'numeric',
-            hour12: true
-        });
+            hour12: true,
+            timeZoneName: 'short'
+        }).format(date);
     }
 
     // Load audit logs on page load

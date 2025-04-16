@@ -9,6 +9,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 import time
 import os
 import tempfile
+from src.utils.timezone_utils import chicago_now, format_chicago_datetime
 
 class AgreementPDF:
     def __init__(self):
@@ -30,7 +31,7 @@ class AgreementPDF:
         # Add agreement ID and date
         pdf.set_font('Arial', '', 10)
         pdf.cell(0, 10, f'Agreement ID: {agreement_id}', ln=True)
-        pdf.cell(0, 10, f'Date: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', ln=True)
+        pdf.cell(0, 10, f'Date: {format_chicago_datetime(chicago_now())}', ln=True)
         
         # Add content
         pdf.set_font('Arial', '', 12)

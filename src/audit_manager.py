@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 import json
 import hashlib
 from .database.supabase_adapter import SupabaseAdapter
+from src.utils.timezone_utils import chicago_now
 
 class AuditManager:
     def __init__(self):
@@ -103,6 +104,6 @@ class AuditManager:
         
     def _generate_transaction_id(self) -> str:
         """Generate a unique transaction ID"""
-        timestamp = datetime.utcnow().timestamp()
+        timestamp = chicago_now().timestamp()
         random_str = hashlib.sha256(str(timestamp).encode()).hexdigest()[:8]
         return f"tx_{random_str}"

@@ -16,6 +16,7 @@ from .database.supabase_adapter import SupabaseAdapter
 from io import BytesIO
 import shutil
 from pathlib import Path
+from src.utils.timezone_utils import chicago_now, format_chicago_datetime
 
 @dataclass
 class Agreement:
@@ -55,8 +56,8 @@ class AgreementManager:
         
     def create_agreement(self, title: str, content: str, recipient_email: str, organization_id: str, created_by_user_id: str, ip_address: str = None) -> Agreement:
         """Create a new agreement with organization context"""
-        agreement_id = f"agr_{int(datetime.utcnow().timestamp())}"
-        timestamp = datetime.utcnow().timestamp()
+        agreement_id = f"agr_{int(chicago_now().timestamp())}"
+        timestamp = chicago_now().timestamp()
         
         # Store agreement details with organization context
         self.db.store_agreement_details({
@@ -83,7 +84,7 @@ class AgreementManager:
             title=title,
             content=content,
             recipient_email=recipient_email,
-            created_at=datetime.utcnow(),
+            created_at=chicago_now(),
             face_embedding=None
         )
     
@@ -103,7 +104,7 @@ class AgreementManager:
                 action_type='verification_attempt',
                 actor_email=client_id,
                 metadata={
-                    'timestamp': datetime.now().isoformat()
+                    'timestamp': format_chicago_datetime(chicago_now())
                 },
                 ip_address=ip_address
             )
@@ -125,7 +126,7 @@ class AgreementManager:
                 actor_email=client_id,
                 metadata={
                     'error': str(e),
-                    'timestamp': datetime.now().isoformat()
+                    'timestamp': format_chicago_datetime(chicago_now())
                 },
                 ip_address=ip_address
             )
@@ -217,7 +218,7 @@ class AgreementManager:
             if agreement['status'] != 'pending':
                 return False
             
-            timestamp = datetime.utcnow().timestamp()
+            timestamp = chicago_now().timestamp()
             
             # Generate transaction ID for this signature operation
             transaction_id = f"tx_{hashlib.sha256(f'{agreement_id}:sign:{timestamp}'.encode()).hexdigest()[:16]}"
@@ -247,7 +248,7 @@ SIGNED
 
 Agreement ID: {agreement_id}
 Transaction ID: {transaction_id}
-Date & Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Chicago Central Time
+Date & Time: {format_chicago_datetime(chicago_now())}
 Signed by: {signature_data['client_id']}
 [VERIFIED] Validated by facial biometrics"""
 
@@ -331,14 +332,14 @@ Signed by: {signature_data['client_id']}
             
         except Exception as e:
             print(f"Error processing signature: {str(e)}")
-            error_transaction_id = f"tx_error_{hashlib.sha256(f'{agreement_id}:error:{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:16]}"
+            error_transaction_id = f"tx_error_{hashlib.sha256(f'{agreement_id}:error:{chicago_now().timestamp()}'.encode()).hexdigest()[:16]}"
             self.db.log_audit_event(
                 agreement_id=agreement_id,
                 action_type='signature_error',
                 actor_email=signature_data['client_id'],
                 metadata={
                     'error': str(e),
-                    'timestamp': datetime.utcnow().timestamp(),
+                    'timestamp': chicago_now().timestamp(),
                     'transaction_id': error_transaction_id
                 },
                 ip_address=signature_data.get('ip_address')
@@ -383,7 +384,7 @@ SIGNED
 
 Agreement ID: {agreement_id}
 Transaction ID: {transaction_id or 'N/A'}
-Date & Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Chicago Central Time
+Date & Time: {format_chicago_datetime(chicago_now())}
 Signed by: {client_id}
 [VERIFIED] Validated by facial biometrics"""
             
@@ -453,13 +454,13 @@ Signed by: {client_id}
                 )
             
             # Log PDF sent event
-            pdf_sent_transaction_id = f"tx_{hashlib.sha256(f'{agreement_id}:pdf_sent:{datetime.utcnow().timestamp()}'.encode()).hexdigest()[:16]}"
+            pdf_sent_transaction_id = f"tx_{hashlib.sha256(f'{agreement_id}:pdf_sent:{chicago_now().timestamp()}'.encode()).hexdigest()[:16]}"
             self.db.log_audit_event(
                 agreement_id=agreement_id,
                 action_type='pdf_sent',
                 actor_email=client_id,
                 metadata={
-                    'timestamp': datetime.utcnow().timestamp(),
+                    'timestamp': chicago_now().timestamp(),
                     'sent_to': [client_id, creator_email] if creator_email and creator_email != client_id else [client_id],
                     'transaction_id': pdf_sent_transaction_id,
                     'parent_transaction_id': transaction_id
@@ -480,7 +481,7 @@ Signed by: {client_id}
         if agreement['status'] != 'pending':
             return False, f"Agreement is already {agreement['status']}"
             
-        timestamp = datetime.utcnow().timestamp()
+        timestamp = chicago_now().timestamp()
         
         # Record cancellation in audit trail
         transaction_id = self.audit_manager.add_cancellation(
@@ -532,7 +533,7 @@ Signed by: {client_id}
                 raise Exception("Organization email settings not configured")
 
             # Create unique ID for agreement
-            agreement_id = f"agr_{int(datetime.utcnow().timestamp())}"
+            agreement_id = f"agr_{int(chicago_now().timestamp())}"
             
             # Create organization-specific subdirectory for original PDFs
             org_uploads_dir = self.uploads_dir / organization_id
@@ -610,7 +611,7 @@ Signed by: {client_id}
                 title=title,
                 content='',
                 recipient_email=recipient_email,
-                created_at=datetime.now(),
+                created_at=chicago_now(),
                 face_embedding=None,
                 status="pending"
             )
@@ -658,7 +659,7 @@ Signed by: {client_id}
                 metadata={
                     'success': str(similarity_score >= 0.50),
                     'similarity_score': float(similarity_score),
-                    'timestamp': datetime.now().isoformat()
+                    'timestamp': format_chicago_datetime(chicago_now())
                 },
                 ip_address=ip_address
             )
@@ -704,7 +705,7 @@ Signed by: {client_id}
             org_signed_dir.mkdir(parents=True, exist_ok=True)
             
             # Generate filename with timestamp
-            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            timestamp = chicago_now().strftime('%Y%m%d_%H%M%S')
             filename = f"signed_{agreement_id}_{timestamp}.pdf"
             filepath = org_signed_dir / filename
             

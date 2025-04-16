@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.backends import default_backend
 import base64
+from src.utils.timezone_utils import chicago_now
 
 class VectorStore:
     def __init__(self):
@@ -127,7 +128,7 @@ class VectorStore:
                         "encrypted_embedding": b64encode(encrypted_vector).decode(),
                         "client_id": client_id,
                         "contract_id": contract_id,
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": chicago_now().isoformat(),
                         "verified_identity": verified
                     }
                 )
@@ -167,7 +168,7 @@ class VectorStore:
             payload={
                 "client_id": client_id,
                 "contract_id": contract_id,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": chicago_now().isoformat()
             },
             points=[reference_id]
         )

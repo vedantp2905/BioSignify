@@ -6,7 +6,7 @@ import os
 from io import BytesIO
 from flask import render_template
 from typing import List, Tuple
-from datetime import datetime
+from src.utils.timezone_utils import chicago_now, format_chicago_datetime
 
 class EmailSender:
     def __init__(self):
@@ -120,7 +120,7 @@ class EmailSender:
             msg['From'] = sender_email  # Use provided sender_email
             
             # Add HTML body using template
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            timestamp = format_chicago_datetime(chicago_now())
             body = render_template('email/signed_agreement.html',
                 agreement_id=agreement_id,
                 transaction_id=transaction_id or 'N/A',

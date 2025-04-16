@@ -20,6 +20,7 @@ import hashlib
 from io import BytesIO
 from src.email_sender import EmailSender
 import io
+from src.utils.timezone_utils import format_chicago_datetime, chicago_now, parse_iso_to_chicago
 
 app = Flask(__name__, 
     template_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates'),
@@ -1616,3 +1617,11 @@ def remove_organization_user(email):
             'success': False,
             'message': str(e)
         }), 400
+
+@app.context_processor
+def utility_processor():
+    return {
+        'format_chicago_datetime': format_chicago_datetime,
+        'chicago_now': chicago_now,
+        'parse_iso_to_chicago': parse_iso_to_chicago
+    }

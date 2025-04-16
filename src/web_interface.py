@@ -38,7 +38,8 @@ app.config.update(
     SESSION_COOKIE_SECURE=True,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
-    PERMANENT_SESSION_LIFETIME=timedelta(hours=24)
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=24),
+    PREFERRED_URL_SCHEME='https'
 )
 
 csrf = CSRFProtect(app)
@@ -60,11 +61,11 @@ def before_request():
         'login', 
         'static', 
         'health_check', 
-        'home',  # This is the root route '/'
+        'home',  # Root route '/'
         'organization_signup_page',
         'organization_signup',
         'serve_openapi_spec',
-        'sign_page'  # Allow direct access to signing page
+        'sign_page'
     ]
     
     # Skip authentication for public endpoints

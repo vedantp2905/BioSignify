@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .button {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Document Ready for Signature</h2>
+        <p>Hello,</p>
+        <p>You have received a document that requires your signature.</p>
+        <p>Please click the button below to view and sign the document:</p>
+        <a href="{{ signing_url }}" class="button">View & Sign Document</a>
+        <p>Or copy and paste this link into your browser:</p>
+        <p>{{ signing_url }}</p>
+        <p>This link will expire after signing is complete.</p>
+        <p>Best regards,<br>E-Sign Team</p>
+    </div>
+</body>
+</html> 

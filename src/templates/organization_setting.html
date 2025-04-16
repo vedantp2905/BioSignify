@@ -1,0 +1,23 @@
+<!-- src/templates/organization_settings.html -->
+{% extends "organization_dashboard.html" %}
+
+{% block organization_content %}
+<div class="card">
+    <div class="card-header">
+        <h4>Organization Settings</h4>
+    </div>
+    <div class="card-body">
+        <form id="orgSettingsForm">
+            <div class="form-group">
+                <label>Organization Name</label>
+                <input type="text" class="form-control" id="orgName" value="{{ organization.name }}">
+            </div>
+            <div class="form-group">
+                <label>Organization Email</label>
+                <input type="email" class="form-control" id="orgEmail" value="{{ organization.email }}">
+            </div>
+            <button type="submit" class="btn btn-primary">Save Changes</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

@@ -8,25 +8,23 @@ class AuditManager:
     def __init__(self):
         self.db = SupabaseAdapter()
         
-    def add_agreement(self, agreement_id: str, recipient_email: str, embedding_reference: str, 
-                     client_id: str, timestamp: float, transaction_id: str = None) -> str:
-        """Record a new agreement creation"""
-        # Generate transaction ID if not provided
-        if not transaction_id:
-            transaction_id = f"tx_{hashlib.sha256(f'{agreement_id}:{timestamp}'.encode()).hexdigest()[:8]}"
-        
-        self.db.log_audit_event(
-            agreement_id=agreement_id,
-            action_type='created',
-            actor_email=client_id,
-            metadata={
-                'transaction_id': transaction_id,
-                'recipient_email': recipient_email,
-                'embedding_reference': embedding_reference,
-                'timestamp': timestamp
-            }
-        )
-        return transaction_id
+    def add_agreement(self, agreement_id: str, recipient_email: str, embedding_reference: str,
+                     created_by_user_id: str, timestamp: float) -> None:
+        """Record a new agreement creation in the audit trail"""
+        try:
+            self.db.log_audit_event(
+                agreement_id=agreement_id,
+                action_type='created',
+                actor_email=created_by_user_id,
+                metadata={
+                    'recipient_email': recipient_email,
+                    'embedding_reference': embedding_reference,
+                    'timestamp': timestamp
+                }
+            )
+        except Exception as e:
+            print(f"Error adding agreement to audit trail: {str(e)}")
+            raise
         
     def add_signature(self, agreement_id: str, signature_timestamp: float, 
                      embedding_reference: str = None) -> str:

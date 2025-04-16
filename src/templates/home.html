@@ -1,155 +1,44 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>BioSign - Home</title>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-    <script src="https://unpkg.com/@lottiefiles/lottie-player@latest/dist/lottie-player.js" defer></script>
-    <style>
-        .gradient-bg {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            position: relative;
-            overflow: hidden;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        .card-hover {
-            transition: transform 0.2s;
-            display: block;
-        }
-        .card-hover:hover {
-            transform: translateY(-5px);
-        }
-        .card {
-            height: 100%;
-            min-height: 250px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-        }
-        
-        /* Bubble Animation */
-        #bubbles {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: 0;
-        }
-        
-        .bubble {
-            position: absolute;
-            background: rgba(255, 255, 255, 0.3);
-            border-radius: 50%;
-            pointer-events: none;
-            animation: float 8s infinite;
-            box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
-        }
-        
-        @keyframes float {
-            0% {
-                transform: translateY(100vh) scale(0);
-                opacity: 0;
-            }
-            50% {
-                opacity: 1;
-            }
-            100% {
-                transform: translateY(-100px) scale(1);
-                opacity: 0;
-            }
-        }
-    </style>
-</head>
-<body>
-    <!-- Bubbles -->
-    <div id="bubbles"></div>
-    
-    <main class="gradient-bg">
-        <div class="container mx-auto px-4 relative z-10">
-            <!-- Header Section -->
-            <div class="text-center mb-16 pt-8">
-                <h1 class="text-6xl font-bold text-white mb-4">BioSign</h1>
-                <p class="text-xl text-white mb-8">Secure Digital Signatures with Face Recognition</p>
-                
-                <!-- Animation with error handling -->
-                <lottie-player src="https://assets9.lottiefiles.com/packages/lf20_rqfqjwcs.json"
-                              background="transparent" speed="1" style="height: 200px; margin: 0 auto;"
-                              loop autoplay
-                              onerror="this.style.display='none'">
-                </lottie-player>
-            </div>
+{% extends "base.html" %}
 
-            <!-- Cards Container -->
-            <div class="max-w-6xl mx-auto grid md:grid-cols-2 lg:grid-cols-4 gap-8 pb-16">
-                <!-- Create Contract Card -->
-                <a href="/create-contract" class="card-hover">
-                    <div class="bg-white rounded-2xl p-8 text-center shadow-lg card">
-                        <div class="text-5xl mb-6">📝</div>
-                        <h2 class="text-2xl font-bold text-gray-800 mb-4">Create Contract</h2>
-                        <p class="text-gray-600">Draft and send new contracts</p>
-                    </div>
+{% block content %}
+<div class="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        <div class="text-center">
+            <h1 class="text-4xl font-bold text-white sm:text-5xl md:text-6xl">
+                Welcome to BioSign
+            </h1>
+            <p class="mt-3 max-w-md mx-auto text-base text-gray-100 sm:text-lg md:mt-5 md:text-xl md:max-w-3xl">
+                Secure digital signatures for your organization
+            </p>
+            
+            <div class="mt-10 flex justify-center gap-6">
+                <a href="/organizations/signup"
+                   class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-blue-700 bg-white hover:bg-gray-50">
+                    Sign Up
                 </a>
-
-                <!-- View Pending Card -->
-                <a href="/pending-agreements" class="card-hover">
-                    <div class="bg-white rounded-2xl p-8 text-center shadow-lg card">
-                        <div class="text-5xl mb-6">📋</div>
-                        <h2 class="text-2xl font-bold text-gray-800 mb-4">Pending</h2>
-                        <p class="text-gray-600">Track pending signatures</p>
-                    </div>
-                </a>
-
-                <!-- View Signed Card -->
-                <a href="/signed-agreements" class="card-hover">
-                    <div class="bg-white rounded-2xl p-8 text-center shadow-lg card">
-                        <div class="text-5xl mb-6">✅</div>
-                        <h2 class="text-2xl font-bold text-gray-800 mb-4">Signed</h2>
-                        <p class="text-gray-600">View completed agreements</p>
-                    </div>
-                </a>
-
-                <!-- View Cancelled Card -->
-                <a href="/cancelled-agreements" class="card-hover">
-                    <div class="bg-white rounded-2xl p-8 text-center shadow-lg card">
-                        <div class="text-5xl mb-6">❌</div>
-                        <h2 class="text-2xl font-bold text-gray-800 mb-4">Cancelled</h2>
-                        <p class="text-gray-600">View cancelled agreements</p>
-                    </div>
+                <a href="/login"
+                   class="inline-flex items-center px-6 py-3 border border-white text-base font-medium rounded-md text-white hover:bg-blue-600">
+                    Login
                 </a>
             </div>
         </div>
-    </main>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            function createBubble() {
-                const bubble = document.createElement('div');
-                bubble.className = 'bubble';
-                
-                const size = Math.random() * 40 + 20;
-                bubble.style.width = `${size}px`;
-                bubble.style.height = `${size}px`;
-                
-                bubble.style.left = `${Math.random() * 100}%`;
-                bubble.style.bottom = '-100px';
-                
-                document.getElementById('bubbles').appendChild(bubble);
-                
-                bubble.addEventListener('animationend', () => {
-                    bubble.remove();
-                });
-            }
-
-            setInterval(createBubble, 500);
+        <div class="mt-20 grid grid-cols-1 gap-8 md:grid-cols-3">
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <h3 class="text-lg font-medium text-gray-900">Secure Signatures</h3>
+                <p class="mt-2 text-gray-600">Advanced encryption and biometric verification for secure digital signatures.</p>
+            </div>
             
-            for(let i = 0; i < 10; i++) {
-                setTimeout(createBubble, Math.random() * 2000);
-            }
-        });
-    </script>
-</body>
-</html> 
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <h3 class="text-lg font-medium text-gray-900">Team Management</h3>
+                <p class="mt-2 text-gray-600">Manage your organization's users and control access to agreements.</p>
+            </div>
+            
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <h3 class="text-lg font-medium text-gray-900">Audit Trail</h3>
+                <p class="mt-2 text-gray-600">Complete audit trail for all agreement activities and signatures.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %} 

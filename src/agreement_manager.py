@@ -9,7 +9,7 @@ from src.email_sender import EmailSender
 import os
 import numpy as np
 import base64
-from typing import Tuple, List
+from typing import Tuple, List, Optional, Dict
 import time
 from .audit_manager import AuditManager
 from .database.supabase_adapter import SupabaseAdapter
@@ -38,21 +38,47 @@ class AgreementManager:
         self.pdf_generator = AgreementPDF()
         self.email_sender = EmailSender()
         
-        # Create uploads directory if it doesn't exist
-        self.uploads_dir = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "uploads"
-        self.uploads_dir.mkdir(exist_ok=True)
+        # Base directory for all PDFs
+        self.base_dir = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        
+        # Directory for original unsigned PDFs
+        self.uploads_dir = self.base_dir / "uploads"
+        self.uploads_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Directory for signed PDFs
+        self.signed_pdfs_dir = self.base_dir / "signed_agreements"
+        self.signed_pdfs_dir.mkdir(parents=True, exist_ok=True)
         
     @property
     def db(self):
         return self._db
         
-    def create_agreement(self, title: str, content: str, recipient_email: str, client_id: str, ip_address: str = None) -> Agreement:
-        """Create a new agreement with manual content"""
+    def create_agreement(self, title: str, content: str, recipient_email: str, organization_id: str, created_by_user_id: str, ip_address: str = None) -> Agreement:
+        """Create a new agreement with organization context"""
         agreement_id = f"agr_{int(datetime.utcnow().timestamp())}"
         timestamp = datetime.utcnow().timestamp()
         
-        # Create agreement in database
-        agreement = Agreement(
+        # Store agreement details with organization context
+        self.db.store_agreement_details({
+            'agreement_id': agreement_id,
+            'title': title,
+            'content': content,
+            'recipient_email': recipient_email,
+            'status': 'pending',
+            'organization_id': organization_id,
+            'created_by_user_id': created_by_user_id
+        })
+        
+        # Record in audit trail with empty embedding reference for now
+        self.audit_manager.add_agreement(
+            agreement_id=agreement_id,
+            recipient_email=recipient_email,
+            embedding_reference=None,  # Add this parameter
+            created_by_user_id=created_by_user_id,
+            timestamp=timestamp
+        )
+        
+        return Agreement(
             id=agreement_id,
             title=title,
             content=content,
@@ -60,27 +86,6 @@ class AgreementManager:
             created_at=datetime.utcnow(),
             face_embedding=None
         )
-        
-        # Store agreement details - without embedding_reference but with created_by
-        self.db.store_agreement_details({
-            'agreement_id': agreement_id,
-            'title': title,
-            'content': content,
-            'recipient_email': recipient_email,
-            'status': 'pending',
-            'created_by': client_id  # Add the creator's email/ID
-        })
-        
-        # Record in audit trail
-        self.audit_manager.add_agreement(
-            agreement_id=agreement_id,
-            recipient_email=recipient_email,
-            embedding_reference=None,  # No embedding at creation
-            client_id=client_id,
-            timestamp=timestamp
-        )
-        
-        return agreement
     
     def verify_signature(self, agreement_id: str, verification_image_path: str, client_id: str, ip_address: str = None) -> tuple[bool, float]:
         """Verify a signature attempt using face comparison with latest client embedding"""
@@ -126,87 +131,61 @@ class AgreementManager:
             )
             raise
     
-    def create_and_send_agreement(self, title: str, content: str, recipient_email: str, client_id: str) -> Agreement:
-        """Create and send a new agreement"""
+    def create_and_send_agreement(self, title: str, content: str, recipient_email: str, 
+                                client_id: str, organization_id: str) -> Agreement:
+        """Create and send an agreement"""
         try:
-            print(f"DEBUG - Creating agreement: {title}")
-            # Create unique ID for agreement
-            agreement_data = f"{title}{recipient_email}{datetime.now().isoformat()}"
-            agreement_id = hashlib.sha512(agreement_data.encode()).hexdigest()[:16]
+            # Get organization details including email settings
+            organization = self.db.get_organization(organization_id)
+            if not organization:
+                raise Exception("Organization not found")
             
-            # Generate timestamp for audit trail
-            timestamp = datetime.utcnow().timestamp()
+            sender_email = organization.get('email')
+            smtp_password = organization.get('smtp_password')
+            smtp_server = organization.get('smtp_server')
+            smtp_port = organization.get('smtp_port')
             
-            # Generate transaction ID for this operation
-            transaction_id = f"tx_{hashlib.sha256(f'{agreement_id}:create:{timestamp}'.encode()).hexdigest()[:16]}"
+            if not sender_email or not smtp_password:
+                raise Exception("Organization email settings not configured")
+
+            # Create agreement
+            agreement = self.create_agreement(
+                title=title,
+                content=content,
+                recipient_email=recipient_email,
+                organization_id=organization_id,
+                created_by_user_id=client_id
+            )
             
             # Generate signing URL
             base_url = os.getenv("SIGNING_BASE_URL", "http://localhost:5000")
-            signing_url = f"{base_url}/sign/{agreement_id}"
+            signing_url = f"{base_url}/sign/{agreement.id}"
             
-            # Generate PDF and send email
+            # Generate PDF
             pdf_content = self.pdf_generator.generate_agreement_pdf(
-                agreement_id=agreement_id,
+                agreement_id=agreement.id,
                 title=title,
                 content=content,
                 recipient_email=recipient_email,
                 signing_url=signing_url
             )
             
-            print(f"DEBUG - Sending email for agreement {agreement_id}")
-            # Send email first to ensure it works before creating DB records
+            # Send email using organization's email settings
             self.email_sender.send_agreement_email(
                 recipient_email=recipient_email,
-                agreement_id=agreement_id,
+                agreement_id=agreement.id,
                 pdf_content=pdf_content,
-                signing_url=signing_url
-            )
-            print(f"DEBUG - Email sent successfully for agreement {agreement_id}")
-            
-            # Only create DB records after email is sent
-            print(f"DEBUG - Storing agreement {agreement_id} in database")
-            self.db.store_agreement_details({
-                'agreement_id': agreement_id,
-                'title': title,
-                'content': content,
-                'recipient_email': recipient_email,
-                'status': 'pending',
-                'created_by': client_id,
-                'pdf_source': 'typed'
-            })
-            
-            # Record in audit trail with transaction ID
-            print(f"DEBUG - Creating audit log for agreement {agreement_id}")
-            self.db.log_audit_event(
-                agreement_id=agreement_id,
-                action_type='created',
-                actor_email=client_id,
-                metadata={
-                    'recipient_email': recipient_email,
-                    'embedding_reference': None,  # No embedding at creation
-                    'timestamp': timestamp,
-                    'transaction_id': transaction_id,
-                    'title': title
-                }
+                signing_url=signing_url,
+                sender_email=sender_email,
+                smtp_password=smtp_password,
+                smtp_server=smtp_server,
+                smtp_port=smtp_port
             )
             
-            # Create agreement object
-            agreement = Agreement(
-                id=agreement_id,
-                title=title,
-                content=content,
-                recipient_email=recipient_email,
-                created_at=datetime.utcnow(),
-                face_embedding=None
-            )
-            
-            print(f"DEBUG - Agreement {agreement_id} created successfully")
             return agreement
             
         except Exception as e:
-            print(f"ERROR - Failed to create and send agreement: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            print(f"Error in create_and_send_agreement: {str(e)}")
             raise
 
     def get_agreement_status(self, agreement_id: str) -> str:
@@ -227,43 +206,105 @@ class AgreementManager:
         
         return "unknown" 
 
-    def process_signature(self, agreement_id: str, client_id: str, ip_address: str = None) -> Tuple[bool, str]:
+    def process_signature(self, agreement_id: str, signature_data: Dict) -> bool:
         """Process agreement signature"""
         try:
             # Get agreement details
             agreement = self.db.get_agreement(agreement_id)
             if not agreement:
-                return False, "Agreement not found"
+                return False
             
             if agreement['status'] != 'pending':
-                return False, f"Agreement is {agreement['status']}"
+                return False
             
             timestamp = datetime.utcnow().timestamp()
             
             # Generate transaction ID for this signature operation
             transaction_id = f"tx_{hashlib.sha256(f'{agreement_id}:sign:{timestamp}'.encode()).hexdigest()[:16]}"
             
-            # Get the latest embedding reference for this client
-            original_embedding, embedding_ref = self.vector_store.get_latest_client_embedding(client_id)
+            # Get the latest embedding for verification
+            original_embedding, embedding_ref = self.vector_store.get_latest_client_embedding(signature_data['client_id'])
+            
+            # Store this signature's embedding in vector store
+            new_embedding_ref = f"emb_{hashlib.sha256(f'{agreement_id}:sign:{timestamp}'.encode()).hexdigest()[:16]}"
+            self.vector_store.store_embedding(
+                original_embedding,  # Store the verified embedding used for this signature
+                signature_data['client_id'],
+                agreement_id,
+                verified=True
+            )
             
             # Generate digital signature
             signature = hashlib.sha512(
-                f"{agreement_id}:{client_id}:{timestamp}".encode()
+                f"{agreement_id}:{signature_data['client_id']}:{timestamp}".encode()
             ).hexdigest()
             
-            # Update agreement status and store embedding reference
+            # Format signature text with proper line breaks
+            signature_text = f"""Digital Signature:
+{signature}
+
+SIGNED
+
+Agreement ID: {agreement_id}
+Transaction ID: {transaction_id}
+Date & Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Chicago Central Time
+Signed by: {signature_data['client_id']}
+[VERIFIED] Validated by facial biometrics"""
+
+            # Generate signed PDF based on source type
+            if agreement.get('pdf_source') == 'uploaded' and agreement.get('pdf_path'):
+                # Use the stored PDF file
+                pdf_path = agreement.get('pdf_path')
+                print(f"DEBUG - Using uploaded PDF from: {pdf_path}")
+                
+                if os.path.exists(pdf_path):
+                    with open(pdf_path, 'rb') as f:
+                        original_pdf = BytesIO(f.read())
+                    
+                    signed_pdf = self.pdf_generator.append_signature_page(
+                        original_pdf_bytes=original_pdf,
+                        agreement_id=agreement_id,
+                        signature_text=signature_text
+                    )
+                else:
+                    print(f"DEBUG - PDF file not found at: {pdf_path}")
+                    # Fallback to generating a new PDF if file is missing
+                    signed_pdf = self.pdf_generator.generate_signed_pdf(
+                        agreement_id=agreement_id,
+                        title=agreement['title'],
+                        content="Original PDF file was not found. This is a replacement document.",
+                        recipient_email=signature_data['client_id'],
+                        signature_text=signature_text
+                    )
+            else:
+                # For drafted agreements with content
+                signed_pdf = self.pdf_generator.generate_signed_pdf(
+                    agreement_id=agreement_id,
+                    title=agreement['title'],
+                    content=agreement['content'],
+                    recipient_email=signature_data['client_id'],
+                    signature_text=signature_text
+                )
+            
+            # Save the signed PDF
+            signed_pdf_path = self.save_signed_pdf(agreement_id, signed_pdf)
+            
+            # Reset BytesIO position for email sending
+            signed_pdf.seek(0)
+            
+            # Update agreement status with signature
             self.db.update_agreement_status(
                 agreement_id=agreement_id,
                 status='signed',
                 signature=signature,
-                embedding_reference=embedding_ref
+                signed_pdf_path=signed_pdf_path
             )
             
             # Log the signature event in audit trail with transaction ID
             self.db.log_audit_event(
                 agreement_id=agreement_id,
                 action_type='signed',
-                actor_email=client_id,
+                actor_email=signature_data['client_id'],
                 metadata={
                     'timestamp': timestamp,
                     'signature': signature,
@@ -271,14 +312,14 @@ class AgreementManager:
                     'transaction_id': transaction_id,
                     'verification_status': '[VERIFIED]' if embedding_ref else 'Standard'
                 },
-                ip_address=ip_address
+                ip_address=signature_data.get('ip_address')
             )
             
             # Generate and send signed PDFs
             try:
                 self._send_signed_pdfs(
                     agreement_id=agreement_id,
-                    client_id=client_id,
+                    client_id=signature_data['client_id'],
                     signature=signature,
                     transaction_id=transaction_id
                 )
@@ -286,7 +327,7 @@ class AgreementManager:
                 print(f"Warning - Error sending signed PDFs: {str(e)}")
                 # Continue execution - PDF sending is not critical for signature process
             
-            return True, transaction_id
+            return True
             
         except Exception as e:
             print(f"Error processing signature: {str(e)}")
@@ -294,23 +335,45 @@ class AgreementManager:
             self.db.log_audit_event(
                 agreement_id=agreement_id,
                 action_type='signature_error',
-                actor_email=client_id,
+                actor_email=signature_data['client_id'],
                 metadata={
                     'error': str(e),
                     'timestamp': datetime.utcnow().timestamp(),
                     'transaction_id': error_transaction_id
                 },
-                ip_address=ip_address
+                ip_address=signature_data.get('ip_address')
             )
             raise
 
     def _send_signed_pdfs(self, agreement_id: str, client_id: str, signature: str, transaction_id: str = None):
         """Generate and send signed PDFs to both parties"""
         try:
-            # Get agreement details
+            # Get agreement details including the signed PDF path
             agreement_data = self.db.get_agreement_details(agreement_id)
             if not agreement_data:
                 raise Exception("Agreement not found")
+            
+            # Get organization details for email settings
+            organization = self.db.get_organization(agreement_data['organization_id'])
+            if not organization:
+                raise Exception("Organization not found")
+            
+            # Get SMTP settings
+            smtp_password = organization.get('smtp_password')
+            smtp_server = organization.get('smtp_server')
+            smtp_port = organization.get('smtp_port')
+            sender_email = organization.get('email')
+            
+            if not smtp_password or not smtp_server or not smtp_port or not sender_email:
+                raise Exception("Organization email settings not configured")
+
+            # Read the saved signed PDF
+            signed_pdf_path = agreement_data.get('signed_pdf_path')
+            if not signed_pdf_path or not os.path.exists(signed_pdf_path):
+                raise Exception("Signed PDF not found")
+            
+            with open(signed_pdf_path, 'rb') as f:
+                signed_pdf = BytesIO(f.read())
             
             # Format signature text with proper line breaks
             signature_text = f"""Digital Signature:
@@ -320,7 +383,7 @@ SIGNED
 
 Agreement ID: {agreement_id}
 Transaction ID: {transaction_id or 'N/A'}
-Date: {datetime.now().strftime('%Y-%m-%d')}
+Date & Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} Chicago Central Time
 Signed by: {client_id}
 [VERIFIED] Validated by facial biometrics"""
             
@@ -359,13 +422,21 @@ Signed by: {client_id}
                     signature_text=signature_text
                 )
             
+            # Configure email sender with organization SMTP settings
+            self.email_sender.configure_smtp(
+                smtp_server=smtp_server,
+                smtp_port=smtp_port,
+                smtp_password=smtp_password
+            )
+            
             # Send to signer (client)
             self.email_sender.send_signed_agreement_email(
                 recipient_email=client_id,
                 agreement_id=agreement_id,
                 pdf_content=signed_pdf,
                 signature=signature,
-                transaction_id=transaction_id
+                transaction_id=transaction_id,
+                sender_email=sender_email
             )
             
             # Send to creator
@@ -377,7 +448,8 @@ Signed by: {client_id}
                     agreement_id=agreement_id,
                     pdf_content=signed_pdf,
                     signature=signature,
-                    transaction_id=transaction_id
+                    transaction_id=transaction_id,
+                    sender_email=sender_email
                 )
             
             # Log PDF sent event
@@ -442,59 +514,52 @@ Signed by: {client_id}
         signature = hashlib.sha512(signature_data.encode()).hexdigest()
         return signature
 
-    def create_agreement_from_pdf(self, title: str, recipient_email: str, pdf_file, client_id: str, ip_address: str = None) -> Agreement:
+    def create_agreement_from_pdf(self, title: str, recipient_email: str, pdf_file, client_id: str, sender_email: str, ip_address: str = None) -> Agreement:
         """Create a new agreement from an uploaded PDF file"""
         try:
+            # Get organization details for email settings
+            organization = self.db.get_organization_by_email(sender_email)
+            if not organization:
+                raise Exception("Organization not found for sender email")
+            
+            # Get organization ID and SMTP settings
+            organization_id = organization['id']
+            smtp_password = organization.get('smtp_password')
+            smtp_server = organization.get('smtp_server')
+            smtp_port = organization.get('smtp_port')
+            
+            if not smtp_password or not smtp_server or not smtp_port:
+                raise Exception("Organization email settings not configured")
+
             # Create unique ID for agreement
-            agreement_data = f"{title}{recipient_email}{datetime.now().isoformat()}"
-            agreement_id = hashlib.sha512(agreement_data.encode()).hexdigest()[:16]
+            agreement_id = f"agr_{int(datetime.utcnow().timestamp())}"
             
-            # Create uploads directory if it doesn't exist
-            uploads_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads")
-            os.makedirs(uploads_dir, exist_ok=True)
-            
-            # Create file path for storing the PDF
-            pdf_filename = f"{agreement_id}.pdf"
-            pdf_path = os.path.join(uploads_dir, pdf_filename)
-            
-            print(f"DEBUG - Saving uploaded PDF to: {pdf_path}")
-            print(f"DEBUG - Uploads directory: {uploads_dir}")
-            
+            # Create organization-specific subdirectory for original PDFs
+            org_uploads_dir = self.uploads_dir / organization_id
+            org_uploads_dir.mkdir(parents=True, exist_ok=True)
+
+            # Create file path for storing the original PDF
+            pdf_filename = f"original_{agreement_id}.pdf"
+            pdf_path = org_uploads_dir / pdf_filename
+
+            print(f"DEBUG - Saving original PDF to: {pdf_path}")
+
             # Handle different types of input and save to file
             if isinstance(pdf_file, BytesIO):
-                # Already a BytesIO object
                 pdf_file.seek(0)
-                with open(pdf_path, 'wb') as f:
-                    f.write(pdf_file.read())
+                pdf_path.write_bytes(pdf_file.read())
             elif hasattr(pdf_file, 'read') and hasattr(pdf_file, 'save'):
-                # File-like object from Flask's request.files with save method
                 pdf_file.save(pdf_path)
             elif hasattr(pdf_file, 'read'):
-                # File-like object without save method
-                with open(pdf_path, 'wb') as f:
-                    f.write(pdf_file.read())
+                pdf_path.write_bytes(pdf_file.read())
             elif isinstance(pdf_file, bytes):
-                # Raw bytes
-                with open(pdf_path, 'wb') as f:
-                    f.write(pdf_file)
-            elif isinstance(pdf_file, str):
-                # Check if it's a file path or base64 string
-                if os.path.isfile(pdf_file):
-                    shutil.copy2(pdf_file, pdf_path)
-                else:
-                    # Assume it's base64 encoded
-                    import base64
-                    try:
-                        with open(pdf_path, 'wb') as f:
-                            f.write(base64.b64decode(pdf_file))
-                    except:
-                        raise ValueError("Invalid PDF data: not a valid file path or base64 string")
+                pdf_path.write_bytes(pdf_file)
             else:
                 raise ValueError(f"Unsupported PDF file type: {type(pdf_file)}")
             
             print(f"DEBUG - PDF saved successfully to: {pdf_path}")
             
-            # Store agreement details with pdf_source and pdf_path
+            # Store agreement details with pdf_source and pdf_path (convert path to string)
             stored_id = self.db.store_agreement_details({
                 'agreement_id': agreement_id,
                 'title': title,
@@ -503,7 +568,8 @@ Signed by: {client_id}
                 'status': 'pending',
                 'created_by': client_id,
                 'pdf_source': 'uploaded',
-                'pdf_path': pdf_path
+                'pdf_path': str(pdf_path),  # Convert WindowsPath to string
+                'organization_id': organization_id
             })
             
             if not stored_id:
@@ -513,12 +579,16 @@ Signed by: {client_id}
             base_url = os.getenv("SIGNING_BASE_URL", "http://localhost:5000")
             signing_url = f"{base_url}/sign/{agreement_id}"
             
-            # Send email
+            # Send email with sender_email
             self.email_sender.send_agreement_email(
                 recipient_email=recipient_email,
                 agreement_id=agreement_id,
-                pdf_content=pdf_file,  # Pass the BytesIO object directly
-                signing_url=signing_url
+                pdf_content=pdf_file,
+                signing_url=signing_url,
+                sender_email=sender_email,
+                smtp_password=smtp_password,
+                smtp_server=smtp_server,
+                smtp_port=smtp_port
             )
             
             # Log agreement creation in audit trail
@@ -619,3 +689,63 @@ Signed by: {client_id}
                 ip_address=ip_address
             )
             raise
+
+    def save_signed_pdf(self, agreement_id: str, pdf_content: BytesIO) -> str:
+        """Save signed PDF to the signed agreements directory"""
+        try:
+            # Get agreement details
+            agreement = self.db.get_agreement_details(agreement_id)
+            if not agreement:
+                raise ValueError(f"Agreement not found: {agreement_id}")
+                
+            # Create organization-specific subdirectory for signed PDFs
+            org_id = agreement.get('organization_id')
+            org_signed_dir = self.signed_pdfs_dir / org_id
+            org_signed_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Generate filename with timestamp
+            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            filename = f"signed_{agreement_id}_{timestamp}.pdf"
+            filepath = org_signed_dir / filename
+            
+            # Convert BytesIO to bytes and save
+            if isinstance(pdf_content, BytesIO):
+                pdf_content.seek(0)
+                filepath.write_bytes(pdf_content.read())
+            else:
+                filepath.write_bytes(pdf_content)
+                
+            # Convert path to string using absolute path
+            filepath_str = str(filepath.absolute())
+            
+            # Update agreement record with signed PDF path
+            self.db.update_agreement_status(
+                agreement_id=agreement_id,
+                status='signed',
+                signed_pdf_path=filepath_str
+            )
+            
+            return filepath_str
+            
+        except Exception as e:
+            print(f"Error saving signed PDF: {str(e)}")
+            raise
+
+    def get_signed_pdf(self, agreement_id: str) -> Optional[bytes]:
+        """Retrieve signed PDF content"""
+        try:
+            agreement = self.db.get_agreement_details(agreement_id)
+            if not agreement or not agreement.get('signed_pdf_path'):
+                return None
+                
+            filepath = agreement['signed_pdf_path']
+            if not os.path.exists(filepath):
+                print(f"Warning: Signed PDF file not found at {filepath}")
+                return None
+                
+            with open(filepath, 'rb') as f:
+                return f.read()
+                
+        except Exception as e:
+            print(f"Error retrieving signed PDF: {str(e)}")
+            return None

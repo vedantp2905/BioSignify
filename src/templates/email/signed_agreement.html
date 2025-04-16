@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Agreement Signed Successfully</h2>
+        <p>Hello,</p>
+        <p>The agreement has been successfully signed. Please find the signed copy attached to this email.</p>
+        <p><strong>Agreement Details:</strong></p>
+        <ul>
+            <li>Agreement ID: {{ agreement_id }}</li>
+            <li>Transaction ID: {{ transaction_id }}</li>
+            <li>Signed Date & Time: {{ timestamp }} Chicago Central Time</li>
+            <li>Digital Signature: {{ signature[:20] }}...</li>
+        </ul>
+        <p>The signed PDF is attached to this email for your records.</p>
+        <p>Best regards,<br>E-Sign Team</p>
+    </div>
+</body>
+</html> 

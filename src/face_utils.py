@@ -99,6 +99,9 @@ class FaceExtractor:
 
     def detect_liveness(self, frame) -> Tuple[bool, str]:
         """Enhanced liveness detection with stricter anti-spoofing"""
+        # Remove the flip - webcam feed is already mirrored
+        # frame = cv2.flip(frame, 1)  # Removing this line
+        
         # 1. Check frame timing
         current_time = time.time()
         frame_delta = current_time - self.last_frame_time
@@ -284,8 +287,7 @@ class FaceExtractor:
                 print("Failed to decode image")
                 return None
             
-            # Flip the image horizontally to match the mirroring in the UI
-            image = cv2.flip(image, 1)  # 1 means flip along y-axis (horizontal flip)
+            # No flipping here - process the image in its original orientation
             
             # Convert to grayscale for face detection
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -359,9 +361,9 @@ class FaceExtractor:
             return None
 
     def _detect_screen_artifacts(self, frame) -> bool:
-        """Enhanced screen artifact detection - with horizontal flip applied"""
-        # First flip the frame horizontally to match our mirrored view
-        frame = cv2.flip(frame, 1)
+        """Enhanced screen artifact detection"""
+        # Remove the flip - webcam feed is already mirrored
+        # frame = cv2.flip(frame, 1)  # Removing this line
         
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
@@ -426,9 +428,6 @@ class FaceExtractor:
             # Convert bytes to numpy array
             nparr = np.frombuffer(image_bytes, np.uint8)
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            
-            # Flip the image horizontally to create a natural mirror effect
-            frame = cv2.flip(frame, 1)  # 1 means flip along y-axis (horizontal flip)
             
             # Convert to grayscale for face detection
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)

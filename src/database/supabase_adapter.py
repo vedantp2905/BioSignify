@@ -1,12 +1,19 @@
+import traceback
 from supabase import create_client, Client
 from typing import List, Dict, Optional
 import os
 from dotenv import load_dotenv
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 import time
 import hashlib
+import secrets
+from cryptography.fernet import Fernet
+import base64
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.backends import default_backend
 
 class SupabaseAdapter:
     def __init__(self):
@@ -28,11 +35,57 @@ class SupabaseAdapter:
         # Set the JWT token in the client's auth header
         self.supabase.postgrest.auth(supabase_jwt)
         
+        # Initialize encryption
+        try:
+            encryption_key = os.getenv("AES_ENCRYPTION_KEY")
+            if not encryption_key:
+                print("Warning: AES_ENCRYPTION_KEY not found, running without encryption")
+                self.cipher_suite = None
+            else:
+                # Generate Fernet key from encryption key
+                kdf = PBKDF2HMAC(
+                    algorithm=hashes.SHA256(),
+                    length=32,
+                    salt=b'biosignify_salt',
+                    iterations=100000,
+                    backend=default_backend()
+                )
+                key = base64.urlsafe_b64encode(kdf.derive(encryption_key.encode()))
+                self.cipher_suite = Fernet(key)
+        except Exception as e:
+            print(f"Warning: Failed to initialize encryption: {str(e)}")
+            self.cipher_suite = None
 
-        
+    def encrypt_smtp_password(self, password: str) -> str:
+        """Encrypt SMTP password"""
+        try:
+            if not password:
+                return None
+            if not self.cipher_suite:
+                print("Warning: Encryption not initialized, storing password unencrypted")
+                return password
+            return self.cipher_suite.encrypt(password.encode()).decode()
+        except Exception as e:
+            print(f"Error encrypting password: {str(e)}")
+            return password
+
+    def decrypt_smtp_password(self, encrypted_password: str) -> str:
+        """Decrypt SMTP password"""
+        try:
+            if not encrypted_password:
+                return None
+            if not self.cipher_suite:
+                print("Warning: Encryption not initialized, returning password as-is")
+                return encrypted_password
+            return self.cipher_suite.decrypt(encrypted_password.encode()).decode()
+        except Exception as e:
+            print(f"Error decrypting password: {str(e)}")
+            return encrypted_password
+
     def store_agreement_details(self, agreement_data: Dict) -> str:
         """Store agreement details in the database"""
         print(f"DEBUG - store_agreement_details called with data: {agreement_data}")
+        print(f"DEBUG - Organization ID: {agreement_data.get('organization_id')}")
         current_time = datetime.utcnow().isoformat()
         
         try:
@@ -40,9 +93,10 @@ class SupabaseAdapter:
             response = self.supabase.table('agreement_details').select('*').eq('agreement_id', agreement_data['agreement_id']).execute()
             existing = response.data[0] if response.data else None
             
-            # Set pdf_source based on how it was created
+            # Set pdf_source and paths
             pdf_source = agreement_data.get('pdf_source', 'typed')
             pdf_path = agreement_data.get('pdf_path', None)
+            signed_pdf_path = agreement_data.get('signed_pdf_path', None)  # New field
             
             # Prepare data for insert/update - make sure column names match the database schema
             agreement_record = {
@@ -52,30 +106,34 @@ class SupabaseAdapter:
                 'status': agreement_data.get('status', 'pending'),
                 'pdf_source': pdf_source,
                 'pdf_path': pdf_path,
+                'signed_pdf_path': signed_pdf_path,  # Add signed PDF path
+                'organization_id': agreement_data.get('organization_id'),
+                'created_by': agreement_data.get('created_by'),
                 'updated_at': current_time
             }
-            
-            # Add created_by field if provided
-            if 'created_by' in agreement_data and agreement_data['created_by']:
-                agreement_record['created_by'] = agreement_data['created_by']
             
             # Only include embedding_reference if it exists
             if 'embedding_reference' in agreement_data and agreement_data['embedding_reference']:
                 agreement_record['embedding_reference'] = agreement_data['embedding_reference']
             
+            # Only include signature if it exists
+            if 'signature' in agreement_data and agreement_data['signature']:
+                agreement_record['signature'] = agreement_data['signature']
+                agreement_record['signed_at'] = current_time
+            
             print(f"DEBUG - Final agreement record: {agreement_record}")
             
             if existing:
                 print(f"DEBUG - Updating existing agreement: {agreement_data['agreement_id']}")
+                # Update existing record
                 response = self.supabase.table('agreement_details').update(
                     agreement_record
                 ).eq('agreement_id', agreement_data['agreement_id']).execute()
             else:
                 print(f"DEBUG - Creating new agreement: {agreement_data['agreement_id']}")
-                agreement_record.update({
-                    'agreement_id': agreement_data['agreement_id'],
-                    'created_at': current_time
-                })
+                # Create new record
+                agreement_record['agreement_id'] = agreement_data['agreement_id']
+                agreement_record['created_at'] = current_time
                 response = self.supabase.table('agreement_details').insert(
                     agreement_record
                 ).execute()
@@ -112,8 +170,8 @@ class SupabaseAdapter:
             traceback.print_exc()
             return None
         
-    def update_agreement_status(self, agreement_id: str, status: str, signature: str = None, embedding_reference: str = None) -> None:
-        """Update agreement status, signature, and embedding reference"""
+    def update_agreement_status(self, agreement_id: str, status: str, signature: str = None, embedding_reference: str = None, signed_pdf_path: str = None) -> None:
+        """Update agreement status, signature, embedding reference, and signed PDF path"""
         update_data = {
             'status': status,
             'updated_at': datetime.utcnow().isoformat()
@@ -125,6 +183,9 @@ class SupabaseAdapter:
         
         if embedding_reference:
             update_data['embedding_reference'] = embedding_reference
+        
+        if signed_pdf_path:
+            update_data['signed_pdf_path'] = signed_pdf_path
         
         self.supabase.table('agreement_details') \
             .update(update_data) \
@@ -166,13 +227,7 @@ class SupabaseAdapter:
         try:
             print(f"DEBUG - Fetching agreement basic info with ID: {agreement_id}")
             response = self.supabase.table('agreement_details').select(
-                'agreement_id',
-                'title',
-                'content',
-                'recipient_email',
-                'status',
-                'signature',
-                'created_at'
+                '*'  # Select all fields instead of specific ones
             ).eq('agreement_id', agreement_id).execute()
             
             print(f"DEBUG - Get agreement response data: {response.data}")
@@ -284,3 +339,297 @@ class SupabaseAdapter:
             import traceback
             traceback.print_exc()
             return []
+
+    def create_organization(self, name: str, email: str) -> dict:
+        """Create a new organization"""
+        try:
+            response = self.supabase.table('organizations').insert({
+                'name': name,
+                'email': email
+            }).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            print(f"Error creating organization: {str(e)}")
+            raise
+
+    def add_organization_user(self, organization_id: str, email: str, role: str = 'user', password_hash: str = None, status: str = 'pending') -> dict:
+        """Add a user to an organization with optional password and status"""
+        try:
+            user_data = {
+                'organization_id': organization_id,
+                'email': email,
+                'role': role,
+                'status': status
+            }
+            
+            # Add password hash if provided
+            if password_hash:
+                user_data['password_hash'] = password_hash
+
+            response = self.supabase.table('organization_users').insert(user_data).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            print(f"Error adding organization user: {str(e)}")
+            raise
+
+    def verify_user_credentials(self, email: str, password_hash: str) -> dict:
+        """Verify user credentials and return user data if valid"""
+        try:
+            # Get user with matching email and password hash
+            response = self.supabase.table('organization_users')\
+                .select('*')\
+                .eq('email', email)\
+                .eq('password_hash', password_hash)\
+                .execute()
+
+            if not response.data:
+                return None
+
+            user = response.data[0]
+            
+            # Get organization details
+            org_response = self.supabase.table('organizations')\
+                .select('*')\
+                .eq('id', user['organization_id'])\
+                .execute()
+
+            if not org_response.data:
+                return None
+
+            # Return combined user and organization data
+            return {
+                'email': user['email'],
+                'role': user['role'],
+                'organization_id': user['organization_id'],
+                'organization_name': org_response.data[0]['name']
+            }
+
+        except Exception as e:
+            print(f"Error verifying user credentials: {str(e)}")
+            return None
+
+    def update_user_password(self, email: str, new_password_hash: str) -> bool:
+        """Update user's password"""
+        try:
+            response = self.supabase.table('organization_users')\
+                .update({'password_hash': new_password_hash})\
+                .eq('email', email)\
+                .execute()
+            return bool(response.data)
+        except Exception as e:
+            print(f"Error updating user password: {str(e)}")
+            return False
+
+    def get_user_by_email(self, email: str) -> dict:
+        """Get user details by email"""
+        try:
+            response = self.supabase.table('organization_users')\
+                .select('*')\
+                .eq('email', email)\
+                .execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            print(f"Error getting user by email: {str(e)}")
+            return None
+
+    def get_user_organizations(self, email: str) -> list:
+        """Get all organizations a user belongs to"""
+        try:
+            response = self.supabase.table('organization_users')\
+                .select('organizations(*)')\
+                .eq('email', email)\
+                .execute()
+            return response.data
+        except Exception as e:
+            print(f"Error getting user organizations: {str(e)}")
+            raise
+
+    def get_organization_agreements(self, organization_id: str, status: str = None) -> list:
+        """Get all agreements for an organization"""
+        try:
+            query = self.supabase.table('agreement_details')\
+                .select('*')\
+                .eq('organization_id', organization_id)
+                
+            if status:
+                query = query.eq('status', status)
+                
+            # Order by created_at in descending order (newest first)
+            query = query.order('created_at', desc=True)
+            
+            response = query.execute()
+            
+            print(f"DEBUG - Retrieved {len(response.data) if response.data else 0} agreements for organization {organization_id}")
+            print(f"DEBUG - First agreement data: {response.data[0] if response.data else None}")
+            
+            return response.data or []
+        except Exception as e:
+            print(f"Error getting organization agreements: {str(e)}")
+            traceback.print_exc()
+            return []
+
+    def get_organization(self, org_id: str) -> dict:
+        """Get organization details with decrypted SMTP password"""
+        try:
+            print(f"DEBUG - Fetching organization with ID: {org_id}")
+            response = self.supabase.table('organizations')\
+                .select('*')\
+                .eq('id', org_id)\
+                .execute()
+                
+            if not response.data:
+                print(f"DEBUG - No organization found with ID: {org_id}")
+                return None
+                
+            org_data = response.data[0]
+            
+            # Handle SMTP password decryption
+            if org_data and org_data.get('smtp_password'):
+                try:
+                    org_data['smtp_password'] = self.decrypt_smtp_password(org_data['smtp_password'])
+                except Exception as e:
+                    print(f"Warning: Failed to decrypt SMTP password: {str(e)}")
+                    # Keep the encrypted password rather than failing
+                    pass
+                
+            return org_data
+            
+        except Exception as e:
+            print(f"Error getting organization: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def get_organization_users(self, org_id: str) -> list:
+        """Get all users in an organization"""
+        try:
+            response = self.supabase.table('organization_users')\
+                .select('*')\
+                .eq('organization_id', org_id)\
+                .execute()
+            return response.data
+        except Exception as e:
+            print(f"Error getting organization users: {str(e)}")
+            raise
+
+    def update_organization(self, org_id: str, data: dict) -> dict:
+        """Update organization details"""
+        try:
+            response = self.supabase.table('organizations')\
+                .update(data)\
+                .eq('id', org_id)\
+                .execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            print(f"Error updating organization: {str(e)}")
+            raise
+
+    def create_invitation_token(self, email: str, organization_id: str, token: str) -> str:
+        """Create an invitation token for a new user"""
+        try:
+            expiry = datetime.utcnow() + timedelta(days=7)
+            
+            response = self.supabase.table('user_invitations').insert({
+                'email': email,
+                'organization_id': organization_id,
+                'token': token,
+                'expires_at': expiry.isoformat()
+            }).execute()
+            
+            if not response.data:
+                print("No data returned from invitation token creation")
+                return None
+            
+            return token
+        except Exception as e:
+            print(f"Error creating invitation token: {str(e)}")
+            return None
+
+    def verify_invitation_token(self, token: str) -> Optional[dict]:
+        """Verify an invitation token and return invitation details"""
+        try:
+            response = self.supabase.table('user_invitations')\
+                .select('*')\
+                .eq('token', token)\
+                .single()\
+                .execute()
+            
+            if not response.data:
+                return None
+            
+            invitation = response.data
+            expiry = datetime.fromisoformat(invitation['expires_at'].replace('Z', '+00:00'))
+            
+            if expiry < datetime.utcnow():
+                return None
+            
+            return invitation
+        except Exception as e:
+            print(f"Error verifying invitation token: {str(e)}")
+            return None
+
+    def complete_user_setup(self, token: str, name: str, password_hash: str) -> bool:
+        """Complete user setup from invitation"""
+        try:
+            invitation = self.verify_invitation_token(token)
+            if not invitation:
+                return False
+            
+            # Update user record with name and password
+            self.supabase.table('organization_users')\
+                .update({
+                    'name': name,
+                    'password_hash': password_hash,
+                    'status': 'active'
+                })\
+                .eq('email', invitation['email'])\
+                .execute()
+            
+            # Delete the used invitation
+            self.supabase.table('user_invitations')\
+                .delete()\
+                .eq('token', token)\
+                .execute()
+            
+            return True
+        except Exception as e:
+            print(f"Error completing user setup: {str(e)}")
+            return False
+
+    def delete_organization_user(self, user_id: str) -> bool:
+        """Delete a user from an organization"""
+        try:
+            response = self.supabase.table('organization_users')\
+                .delete()\
+                .eq('id', user_id)\
+                .execute()
+            return bool(response.data)
+        except Exception as e:
+            print(f"Error deleting organization user: {str(e)}")
+            return False
+
+    def update_organization_email_settings(self, org_id: str, email_settings: dict) -> dict:
+        """Update organization email settings with encrypted SMTP password"""
+        try:
+            # Encrypt SMTP password if provided
+            if 'smtp_password' in email_settings:
+                email_settings['smtp_password'] = self.encrypt_smtp_password(email_settings['smtp_password'])
+            
+            response = self.supabase.table('organizations')\
+                .update(email_settings)\
+                .eq('id', org_id)\
+                .execute()
+            
+            return response.data[0] if response.data else None
+        except Exception as e:
+            print(f"Error updating organization email settings: {str(e)}")
+            raise
+
+    def get_organization_by_email(self, email: str) -> dict:
+        """Get organization details by email address with decrypted SMTP password"""
+        result = self.supabase.table('organizations').select('*').eq('email', email).execute()
+        if result.data:
+            if result.data[0].get('smtp_password'):
+                result.data[0]['smtp_password'] = self.decrypt_smtp_password(result.data[0]['smtp_password'])
+            return result.data[0]
+        return None

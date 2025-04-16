@@ -30,7 +30,7 @@ class AgreementPDF:
         # Add agreement ID and date
         pdf.set_font('Arial', '', 10)
         pdf.cell(0, 10, f'Agreement ID: {agreement_id}', ln=True)
-        pdf.cell(0, 10, f'Date: {datetime.now().strftime("%Y-%m-%d")}', ln=True)
+        pdf.cell(0, 10, f'Date: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', ln=True)
         
         # Add content
         pdf.set_font('Arial', '', 12)
@@ -119,18 +119,75 @@ class AgreementPDF:
         """Create a signature page as a separate PDF in memory"""
         output = BytesIO()
         
-        # Create PDF in memory
+        # Create PDF in memory with custom styles
         doc = SimpleDocTemplate(output, pagesize=letter)
+        
+        # Create custom styles
+        styles = getSampleStyleSheet()
+        
+        # Header style for "Digital Signature" text
+        header_style = styles['Heading1']
+        header_style.textColor = '#1a365d'  # Dark blue
+        header_style.fontSize = 24
+        header_style.spaceAfter = 30
+        
+        # Signature style for the hash
+        signature_style = styles['Code']  # Monospace font for the hash
+        signature_style.textColor = '#2563eb'  # Blue
+        signature_style.fontSize = 11
+        signature_style.spaceAfter = 20
+        
+        # Info style for agreement details
+        info_style = styles['Normal']
+        info_style.textColor = '#374151'  # Gray
+        info_style.fontSize = 12
+        info_style.spaceAfter = 8
+        
+        # Verification style for the [VERIFIED] badge
+        verified_style = styles['Normal']
+        verified_style.textColor = '#059669'  # Green
+        verified_style.fontSize = 14
+        verified_style.spaceAfter = 12
+        verified_style.bold = True
+        
         story = []
         
-        # Process signature text to ensure proper line breaks
+        # Add decorative line
+        story.append(Paragraph("<hr width='100%' color='#e5e7eb'/>", styles['Normal']))
+        story.append(Spacer(1, 30))
+        
+        # Process signature text and apply appropriate styles
         lines = signature_text.split('\n')
         for line in lines:
-            if line.strip():  # Skip empty lines
-                story.append(Paragraph(line.strip(), self.signature_style))
+            if line.strip():
+                if line.startswith('Digital Signature:'):
+                    # Header
+                    story.append(Paragraph(line, header_style))
+                elif line.startswith('SIGNED'):
+                    # Add some space before SIGNED
+                    story.append(Spacer(1, 20))
+                    story.append(Paragraph(f"<b>{line}</b>", info_style))
+                    story.append(Spacer(1, 20))
+                elif '[VERIFIED]' in line:
+                    # Verification badge
+                    story.append(Paragraph(line, verified_style))
+                elif line.startswith('Agreement ID:') or line.startswith('Transaction ID:') or line.startswith('Date & Time:') or line.startswith('Signed by:'):
+                    # Agreement details
+                    key, value = line.split(':', 1)
+                    story.append(Paragraph(
+                        f"<b>{key}:</b>{value}", 
+                        info_style
+                    ))
+                else:
+                    # The actual signature hash
+                    story.append(Paragraph(line, signature_style))
             else:
-                # Add a small spacer for empty lines
-                story.append(Spacer(1, 6))
+                # Add spacing between sections
+                story.append(Spacer(1, 12))
+        
+        # Add decorative line at bottom
+        story.append(Spacer(1, 30))
+        story.append(Paragraph("<hr width='100%' color='#e5e7eb'/>", styles['Normal']))
         
         # Build PDF
         doc.build(story)

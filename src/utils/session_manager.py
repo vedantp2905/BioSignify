@@ -8,11 +8,13 @@ class SessionManager:
         self.secret_key = os.getenv('JWT_SECRET_KEY', 'your-secret-key')
         self.session_duration = timedelta(hours=24)
         
-    def create_session(self, user_id: str, email: str) -> str:
-        """Create a new session token"""
+    def create_session(self, user_id: str, email: str, organization_id: str = None, role: str = None) -> str:
+        """Create a new session token with organization context"""
         payload = {
             'user_id': user_id,
             'email': email,
+            'organization_id': organization_id,
+            'role': role,
             'exp': datetime.utcnow() + self.session_duration,
             'iat': datetime.utcnow()
         }

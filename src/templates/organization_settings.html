@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <h1 class="text-3xl font-bold mb-8">Organization Settings</h1>
+
+    <!-- Organization Details Section -->
+    <div class="bg-white shadow rounded-lg p-6 mb-8">
+        <h2 class="text-xl font-semibold mb-4">Organization Details</h2>
+        <form id="orgDetailsForm" class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Organization Name</label>
+                <input type="text" id="orgName" value="{{ organization.name }}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+        </form>
+    </div>
+
+    <!-- Email Settings Section -->
+    <div class="bg-white shadow rounded-lg p-6 mb-8">
+        <h2 class="text-xl font-semibold mb-4">Email Settings</h2>
+        <form id="emailSettingsForm" class="space-y-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Organization Email</label>
+                <input type="email" id="orgEmail" value="{{ organization.email }}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">SMTP Password</label>
+                <input type="password" id="smtpPassword" placeholder="Enter SMTP password" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">SMTP Server</label>
+                <input type="text" id="smtpServer" value="{{ organization.smtp_server }}" placeholder="e.g., smtp.office365.com" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">SMTP Port</label>
+                <input type="number" id="smtpPort" value="{{ organization.smtp_port }}" placeholder="587" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <button type="submit" class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">
+                Save Email Settings
+            </button>
+        </form>
+    </div>
+
+    <!-- Test Email Section -->
+    <div class="bg-white shadow rounded-lg p-6 mb-8">
+        <h2 class="text-xl font-semibold mb-4">Test Email Configuration</h2>
+        <form id="testEmailForm" class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Test Email Address</label>
+                <input type="email" id="testEmail" placeholder="Enter email to test" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
+                Send Test Email
+            </button>
+        </form>
+    </div>
+</div>
+
+<script>
+document.getElementById('emailSettingsForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const response = await fetch('/api/organization/settings/email', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': document.querySelector('input[name="csrf_token"]').value
+        },
+        body: JSON.stringify({
+            email: document.getElementById('orgEmail').value,
+            smtp_password: document.getElementById('smtpPassword').value,
+            smtp_server: document.getElementById('smtpServer').value,
+            smtp_port: parseInt(document.getElementById('smtpPort').value)
+        })
+    });
+    
+    const data = await response.json();
+    if (data.success) {
+        alert('Email settings updated successfully');
+    } else {
+        alert('Error updating email settings: ' + data.message);
+    }
+});
+
+document.getElementById('testEmailForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const response = await fetch('/api/organization/settings/test-email', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': document.querySelector('input[name="csrf_token"]').value
+        },
+        body: JSON.stringify({
+            test_email: document.getElementById('testEmail').value
+        })
+    });
+    
+    const data = await response.json();
+    alert(data.message);
+});
+</script>
+{% endblock %} 

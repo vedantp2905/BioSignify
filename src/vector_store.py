@@ -24,9 +24,9 @@ class VectorStore:
         )
         
         # Setup encryption
-        encryption_key = os.getenv("ENCRYPTION_KEY")
+        encryption_key = os.getenv("AES_ENCRYPTION_KEY")
         if not encryption_key:
-            raise ValueError("ENCRYPTION_KEY must be set in .env")
+            raise ValueError("AES_ENCRYPTION_KEY must be set in .env")
             
         salt = b"fixed_salt"  # You might want to store this securely
         kdf = PBKDF2HMAC(

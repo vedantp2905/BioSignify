@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, session, g
+from flask import Flask, render_template, request, jsonify, session, g, flash, send_file, Response
 from src.agreement_manager import AgreementManager
 import os
 from dotenv import load_dotenv
@@ -18,6 +18,8 @@ from flask import send_from_directory
 import werkzeug
 import hashlib
 from io import BytesIO
+from src.email_sender import EmailSender
+import io
 
 app = Flask(__name__, 
     template_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates'),
@@ -49,29 +51,77 @@ app.secret_key = os.getenv('FLASK_SECRET_KEY', 'dev-secret-key')  # Change in pr
 # Add session and rate limiting middleware
 @app.before_request
 def before_request():
-
     if not hasattr(app, 'session_manager'):
         app.session_manager = SessionManager()
     
     # List of endpoints that don't require authentication
-    public_endpoints = ['login', 'static', 'health_check']
-    
+    public_endpoints = [
+        'login', 
+        'static', 
+        'health_check', 
+        'home',  # This is the root route '/'
+        'organization_signup_page',
+        'organization_signup',
+        'serve_openapi_spec',
+        'sign_page'  # Allow direct access to signing page
+    ]
     
     # Skip authentication for public endpoints
     if request.endpoint in public_endpoints:
-        return
+        return None  # Important: return None to continue processing
+    
+    # Skip auth check for static files
+    if request.path.startswith('/static/'):
+        return None
         
     # Validate session for protected routes
     token = session.get('session_token')
     if not token:
-        return redirect(url_for('login'))
+        if request.path.startswith('/api/'):
+            return jsonify({'error': 'Unauthorized'}), 401
+        return redirect(url_for('home'))  # Changed from 'login' to 'home'
     
     user_data = app.session_manager.validate_session(token)
     if not user_data:
         session.clear()
-        return redirect(url_for('login'))
+        if request.path.startswith('/api/'):
+            return jsonify({'error': 'Session expired'}), 401
+        return redirect(url_for('home'))  # Changed from 'login' to 'home'
     
     g.user = user_data
+
+def require_auth(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        token = session.get('session_token')
+        if not token:
+            return jsonify({
+                'error': 'Unauthorized',
+                'message': 'Please log in to access this resource'
+            }), 401
+        
+        user_data = app.session_manager.validate_session(token)
+        if not user_data:
+            session.clear()
+            return jsonify({
+                'error': 'Session expired',
+                'message': 'Please log in again'
+            }), 401
+            
+        g.user = user_data
+        return f(*args, **kwargs)
+    return decorated_function
+
+def require_org_auth(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not g.user or not g.user.get('organization_id'):
+            return jsonify({
+                'error': 'Unauthorized',
+                'message': 'No organization access'
+            }), 403
+        return f(*args, **kwargs)
+    return decorated_function
 
 @app.route('/health')
 def health_check():
@@ -149,33 +199,20 @@ def sign_agreement():
                 'message': 'Missing required fields'
             }), 400
             
-        # Check agreement status
-        agreement = agreement_manager.db.get_agreement_details(agreement_id)
-        if not agreement:
-            return jsonify({
-                'success': False,
-                'message': 'Agreement not found'
-            }), 404
-            
-        if agreement.get('status') != 'pending':
-            return jsonify({
-                'success': False,
-                'message': f'Agreement cannot be signed (status: {agreement.get("status")})'
-            }), 400
-            
-        # Process signature
-        success, transaction_id = agreement_manager.process_signature(
+        # Process signature with correct parameters
+        success = agreement_manager.process_signature(
             agreement_id=agreement_id,
-            client_id=client_id,
-            ip_address=client_ip
+            signature_data={
+                'client_id': client_id,
+                'ip_address': client_ip
+            }
         )
         
         if success:
             return jsonify({
                 'success': True,
                 'message': 'Agreement signed successfully. Signed copies have been sent to all parties.',
-                'agreement_id': agreement_id,
-                'transaction_id': transaction_id
+                'agreement_id': agreement_id
             })
             
         return jsonify({
@@ -192,22 +229,32 @@ def sign_agreement():
 
 @app.route('/')
 def home():
-    """Home page with 4 cards"""
+    """Landing page with signup/login options"""
+    # Check if user is already logged in
+    token = session.get('session_token')
+    if token:
+        user_data = app.session_manager.validate_session(token)
+        if user_data and user_data.get('organization_id'):
+            return redirect(url_for('dashboard'))
+    
+    # If not logged in, show the home page with signup/login options
     return render_template('home.html')
 
 @app.route('/pending-agreements')
+@require_auth
 def pending_agreements():
     """Pending agreements page"""
     return render_template('pending_agreements.html')
 
 @app.route('/api/pending-agreements')
+@require_auth
 def get_pending_agreements():
-    """API endpoint to get pending agreements"""
     try:
-        # Get all agreements with pending status directly from agreement_details table
+        # Filter by organization
         response = agreement_manager.db.supabase.table('agreement_details') \
             .select('*') \
             .eq('status', 'pending') \
+            .eq('organization_id', g.user['organization_id']) \
             .execute()
             
         agreements = []
@@ -221,7 +268,6 @@ def get_pending_agreements():
         
         return jsonify({'agreements': agreements})
     except Exception as e:
-        print(f"Error getting pending agreements: {str(e)}")
         return jsonify({'error': 'Failed to fetch pending agreements'}), 500
 
 @app.route('/agreement/<agreement_id>')
@@ -290,6 +336,7 @@ def create_contract():
         }), 500
 
 @app.route('/create-contract')
+@require_auth
 def create_contract_page():
     """Create contract page"""
     return render_template('create_contract.html')
@@ -317,14 +364,32 @@ def cancel_agreement(agreement_id):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/signed-agreements')
+@require_auth
 def signed_agreements_page():
     """Signed agreements page"""
     return render_template('signed_agreements.html')
 
 @app.route('/cancelled-agreements')
-def cancelled_agreements_page():
-    """Cancelled agreements page"""
-    return render_template('cancelled_agreements.html')
+@require_auth
+def cancelled_agreements():
+    """Display cancelled agreements for the organization"""
+    try:
+        # Get cancelled agreements for the organization
+        agreements = agreement_manager.db.get_organization_agreements(
+            organization_id=g.user['organization_id'],
+            status='cancelled'
+        )
+        
+        return render_template(
+            'cancelled_agreements.html',
+            agreements=agreements,
+            user=g.user
+        )
+    except Exception as e:
+        print(f"Error loading cancelled agreements: {str(e)}")
+        return render_template('error.html', 
+            message=f"Error loading cancelled agreements: {str(e)}"
+        )
 
 @app.route('/api/signed-agreements')
 def get_signed_agreements():
@@ -538,54 +603,53 @@ def add_security_headers(response):
     response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     return response
 
-def require_auth(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        token = session.get('session_token')
-        if not token:
-            return jsonify({
-                'error': 'Unauthorized',
-                'message': 'Please log in to access this resource'
-            }), 401
-        
-        user_data = app.session_manager.validate_session(token)
-        if not user_data:
-            session.clear()
-            return jsonify({
-                'error': 'Session expired',
-                'message': 'Please log in again'
-            }), 401
-            
-        g.user = user_data
-        return f(*args, **kwargs)
-    return decorated_function
-
 # Then define your routes
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'GET':
         return render_template('login.html')
         
-    if request.method == 'POST':
-        email = request.form.get('email')
-        if not email:
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        password = data.get('password')
+        
+        if not email or not password:
             return jsonify({
                 'error': 'Bad request',
-                'message': 'Email is required'
+                'message': 'Email and password are required'
             }), 400
         
+        # Hash the password for comparison
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+            
+        # Get user's organizations and verify password
+        user = agreement_manager.db.verify_user_credentials(email, password_hash)
+        if not user:
+            return jsonify({
+                'error': 'Unauthorized',
+                'message': 'Invalid email or password'
+            }), 401
+            
+        # Create session with organization context
         token = app.session_manager.create_session(
             user_id=email,
-            email=email
+            email=email,
+            organization_id=user['organization_id'],
+            role=user['role']
         )
-        session['session_token'] = token
         
+        session['session_token'] = token
         return jsonify({
             'success': True,
-            'message': 'Logged in successfully'
+            'redirect': url_for('dashboard')
         })
-    
-    return render_template('login.html')
+        
+    except Exception as e:
+        return jsonify({
+            'error': 'Server error',
+            'message': str(e)
+        }), 500
 
 @app.errorhandler(Exception)
 def handle_error(error):
@@ -670,6 +734,20 @@ def upload_agreement():
         print(f"DEBUG - Request files: {request.files}")
         print(f"DEBUG - Request form: {request.form}")
         
+        if not g.user:
+            return jsonify({
+                'success': False,
+                'message': 'User not authenticated'
+            }), 401
+
+        # Get organization details to use organization email as sender
+        organization = agreement_manager.db.get_organization(g.user['organization_id'])
+        if not organization or not organization.get('email'):
+            return jsonify({
+                'success': False,
+                'message': 'Organization email not configured'
+            }), 400
+        
         if 'pdf_file' not in request.files:
             print("DEBUG - No pdf_file in request.files")
             return jsonify({
@@ -708,7 +786,8 @@ def upload_agreement():
             title=request.form['title'],
             recipient_email=request.form['recipient_email'],
             pdf_file=pdf_file,
-            client_id=g.user['email'],  # Fix: access email from user dict
+            client_id=g.user['email'],
+            sender_email=organization['email'],  # Add the organization email as sender
             ip_address=get_client_ip()
         )
         
@@ -853,152 +932,594 @@ def serve_openapi_spec():
     ) 
 
 @app.route('/api/create-agreement', methods=['POST'])
+@require_auth
+@require_org_auth
 def create_agreement():
     try:
-        print("DEBUG - Starting create_agreement endpoint")
-        # Extract data from request
         data = request.get_json()
-        if not data:
-            print("DEBUG - No JSON data in request")
-            return jsonify({
-                "success": False,
-                "message": "Missing request data"
-            }), 400
-            
-        title = data.get('title')
-        content = data.get('content')
-        recipient_email = data.get('recipient_email')
         
-        print(f"DEBUG - Received request with title: {title}")
-        print(f"DEBUG - Content length: {len(content) if content else 0}")
-        print(f"DEBUG - Recipient email: {recipient_email}")
-        
-        # Get client IP for audit log
-        ip_address = get_client_ip()
-        
-        # Get user email from session
-        if not g.user or not g.user.get('email'):
-            print("DEBUG - No authenticated user found")
-            return jsonify({
-                "success": False,
-                "message": "User not authenticated"
-            }), 401
-            
-        client_id = g.user.get('email')
-        
-        if not all([title, content, recipient_email, client_id]):
-            print(f"DEBUG - Missing required fields: title={bool(title)}, content={bool(content)}, recipient={bool(recipient_email)}, client={bool(client_id)}")
-            return jsonify({
-                "success": False,
-                "message": "Missing required fields"
-            }), 400
-            
-        # Create and send agreement
-        print("DEBUG - Calling create_and_send_agreement")
+        # Create agreement with organization context
         agreement = agreement_manager.create_and_send_agreement(
-            title=title,
-            content=content,
-            recipient_email=recipient_email,
-            client_id=client_id
+            title=data.get('title'),
+            content=data.get('content'),
+            recipient_email=data.get('recipient_email'),
+            client_id=g.user['email'],
+            organization_id=g.user['organization_id']
         )
         
-        print(f"DEBUG - Agreement created successfully with ID: {agreement.id}")
         return jsonify({
             "success": True, 
             "agreement_id": agreement.id,
             "message": "Agreement created and sent successfully"
-        }), 200
+        })
         
     except Exception as e:
-        print(f"DEBUG - Error creating agreement: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({
-            "success": False,
+            return jsonify({
+                "success": False,
             "message": str(e)
-        }), 500 
-        
+        }), 500
+
 @app.route('/api/resend-agreement/<agreement_id>', methods=['POST'])
 def resend_agreement(agreement_id):
-    print(f"DEBUG - Resend request received for agreement ID: {agreement_id}")
     try:
-        client_ip = get_client_ip()
-        
-        if not g.user:
-            return jsonify({
-                'success': False,
-                'message': 'User not authenticated'
-            }), 401
-            
         # Get agreement details
         agreement = agreement_manager.db.get_agreement_details(agreement_id)
         if not agreement:
-            return jsonify({
-                'success': False,
-                'message': 'Agreement not found'
-            }), 404
-            
-        if agreement.get('status') != 'pending':
-            return jsonify({
-                'success': False,
-                'message': f'Cannot resend agreement with status: {agreement.get("status")}'
-            }), 400
-            
-        # Generate transaction ID for this resend operation
-        timestamp = datetime.utcnow().timestamp()
-        transaction_id = f"tx_{hashlib.sha256(f'{agreement_id}:resend:{timestamp}'.encode()).hexdigest()[:16]}"
-        
+            return jsonify({'error': 'Agreement not found'}), 404
+
+        # Get organization details
+        organization = agreement_manager.db.get_organization(agreement['organization_id'])
+        if not organization:
+            return jsonify({'error': 'Organization not found'}), 404
+
+        # Get organization email settings
+        sender_email = organization.get('email')
+        smtp_password = organization.get('smtp_password')
+        smtp_server = organization.get('smtp_server')
+        smtp_port = organization.get('smtp_port')
+
+        if not all([sender_email, smtp_password, smtp_server, smtp_port]):
+            return jsonify({'error': 'Organization email settings not configured'}), 400
+
         # Generate signing URL
         base_url = os.getenv("SIGNING_BASE_URL", "http://localhost:5000")
         signing_url = f"{base_url}/sign/{agreement_id}"
-        
-        # Generate or retrieve PDF content
-        if agreement.get('pdf_source') == 'uploaded' and agreement.get('pdf_path') and os.path.exists(agreement.get('pdf_path')):
-            # Use the stored PDF file
-            with open(agreement.get('pdf_path'), 'rb') as f:
-                pdf_content = BytesIO(f.read())
-        else:
-            # Generate new PDF from content
-            pdf_content = agreement_manager.pdf_generator.generate_agreement_pdf(
-                agreement_id=agreement_id,
-                title=agreement.get('title', 'Agreement'),
-                content=agreement.get('content', ''),
-                recipient_email=agreement.get('recipient_email'),
-                signing_url=signing_url
-            )
-        
-        # Resend email
-        agreement_manager.email_sender.send_agreement_email(
-            recipient_email=agreement.get('recipient_email'),
+
+        # Read the PDF file
+        pdf_content = BytesIO()
+        with open(agreement['pdf_path'], 'rb') as f:
+            pdf_content.write(f.read())
+        pdf_content.seek(0)
+
+        # Send the email
+        success = agreement_manager.email_sender.send_agreement_email(
+            recipient_email=agreement['recipient_email'],
             agreement_id=agreement_id,
             pdf_content=pdf_content,
-            signing_url=signing_url
+            signing_url=signing_url,
+            sender_email=sender_email,
+            smtp_password=smtp_password,
+            smtp_server=smtp_server,
+            smtp_port=smtp_port
         )
-        
-        # Log the resend event
-        agreement_manager.db.log_audit_event(
-            agreement_id=agreement_id,
-            action_type='email_resent',
-            actor_email=g.user['email'],
-            metadata={
-                'timestamp': timestamp,
-                'transaction_id': transaction_id,
-                'recipient_email': agreement.get('recipient_email')
-            },
-            ip_address=client_ip
-        )
-        
-        return jsonify({
-            'success': True,
-            'message': f'Agreement email resent successfully to {agreement.get("recipient_email")}',
-            'transaction_id': transaction_id
-        })
-        
+
+        if success:
+            return jsonify({'message': 'Agreement resent successfully'}), 200
+        else:
+            return jsonify({'error': 'Failed to resend agreement'}), 500
+
     except Exception as e:
         print(f"Error resending agreement: {str(e)}")
         import traceback
         traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/organizations/signup', methods=['GET'])
+def organization_signup_page():
+    """Organization signup page"""
+    return render_template('organization_signup.html')
+
+@app.route('/api/organizations/signup', methods=['POST'])
+@csrf.exempt
+def organization_signup():
+    """API endpoint for organization signup"""
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['name', 'email', 'adminEmail', 'adminPassword']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({
+                    'success': False,
+                    'message': f'Missing required field: {field}'
+            }), 400
+            
+        # Validate password length
+        if len(data['adminPassword']) < 8:
+            return jsonify({
+                'success': False,
+                'message': 'Password must be at least 8 characters long'
+            }), 400
+
+        # Hash the password
+        password_hash = hashlib.sha256(data['adminPassword'].encode()).hexdigest()
+
+        # Create organization
+        org = agreement_manager.db.create_organization(
+            name=data['name'],
+            email=data['email']
+        )
+        
+        if not org:
+            return jsonify({
+                'success': False,
+                'message': 'Failed to create organization'
+            }), 500
+
+        # Add admin user with password
+        user = agreement_manager.db.add_organization_user(
+            organization_id=org['id'],
+            email=data['adminEmail'],
+            role='admin',
+            password_hash=password_hash
+        )
+        
+        if not user:
+            # Rollback organization creation if possible
+            return jsonify({
+                'success': False,
+                'message': 'Failed to create admin user'
+            }), 500
+
+        return jsonify({
+            'success': True,
+            'message': 'Organization created successfully'
+        })
+        
+    except Exception as e:
+        print(f"Error in organization signup: {str(e)}")
         return jsonify({
             'success': False,
-            'message': f'Error resending agreement: {str(e)}'
-        }), 500
+            'message': str(e)
+            }), 400
+            
+@app.route('/api/organizations/<org_id>/agreements')
+@require_auth
+@require_org_auth
+def get_organization_agreements(org_id):
+    """Get agreements for an organization"""
+    try:
+        # Verify user belongs to organization
+        if g.user['organization_id'] != org_id:
+            return jsonify({
+                'success': False,
+                'message': 'Unauthorized'
+            }), 403
+            
+        status = request.args.get('status')
+        agreements = agreement_manager.db.get_organization_agreements(org_id, status)
+        
+        return jsonify({
+            'success': True,
+            'agreements': agreements
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500 
+        
+@app.route('/organization/settings')
+@require_auth
+@require_org_auth
+def organization_settings():
+    """Organization settings page"""
+    try:
+        org_id = g.user['organization_id']
+        organization = agreement_manager.db.get_organization(org_id)
+        
+        if not organization:
+            return render_template('error.html', 
+                message="Organization not found. Please contact support.")
+        
+        # Add any additional organization settings from the database
+        organization = {
+            'id': organization.get('id'),
+            'name': organization.get('name'),
+            'email': organization.get('email'),
+            'email_signature': organization.get('email_signature'),
+            'logo_url': organization.get('logo_url'),
+            'primary_color': organization.get('primary_color'),
+            'created_at': organization.get('created_at')
+        }
+        
+        return render_template('organization_settings.html', 
+                             organization=organization,
+                             user=g.user)
+    except Exception as e:
+        print(f"Error loading organization settings: {str(e)}")
+        return render_template('error.html', 
+            message="Error loading organization settings. Please try again later.")
+
+@app.route('/organization/users')
+@require_auth
+@require_org_auth
+def organization_users():
+    """Organization users management page"""
+    try:
+        org_id = g.user['organization_id']
+        if g.user['role'] != 'admin':
+            return render_template('error.html', message="Unauthorized")
+            
+        organization = agreement_manager.db.get_organization(org_id)
+        users = agreement_manager.db.get_organization_users(org_id)
+        return render_template('organization_users.html', 
+                             organization=organization,
+                             organization_users=users)
+    except Exception as e:
+        return render_template('error.html', message=str(e))
+
+@app.route('/api/organization/users', methods=['POST'])
+@require_auth
+@require_org_auth
+@csrf.exempt  # Add this decorator since we'll handle CSRF manually
+def add_organization_user():
+    """Add a new user to the organization"""
+    try:
+        if g.user['role'] != 'admin':
+            return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+            
+        data = request.get_json()
+        email = data['email']
+        role = data.get('role', 'user')
+        
+        # Create user with pending status
+        try:
+            user = agreement_manager.db.add_organization_user(
+                organization_id=g.user['organization_id'],
+                email=email,
+                role=role,
+                status='pending'  # This will now be accepted by the method
+            )
+            
+            if not user:
+                raise Exception("Failed to create user record")
+                
+            # Create invitation token
+            token = agreement_manager.db.create_invitation_token(email, g.user['organization_id'])
+            
+            # Generate setup URL
+            setup_url = url_for('setup_invitation', token=token, _external=True)
+            
+            # Send invitation email using EmailSender
+            email_body = render_template('email/invitation.html',
+                setup_url=setup_url,
+                organization_name=g.user.get('organization_name', 'BioSign')
+            )
+            
+            # Send invitation email
+            email_sent = email_sender.send_email(
+                recipient_email=email,
+                subject='Complete your BioSign account setup',
+                body=email_body,
+                is_html=True
+            )
+            
+            if not email_sent:
+                raise Exception("Failed to send invitation email")
+            
+            return jsonify({
+                'success': True,
+                'message': f'Invitation sent to {email}'
+            })
+            
+        except Exception as e:
+            print(f"Error in user creation process: {str(e)}")
+            return jsonify({
+                'success': False,
+                'message': f'Failed to create user: {str(e)}'
+            }), 400
+            
+    except Exception as e:
+        print(f"Error adding user: {str(e)}")
+        return jsonify({
+                'success': False,
+            'message': str(e)
+        }), 400
+
+@app.route('/setup-invitation/<token>')
+def setup_invitation(token):
+    """Handle invitation setup page"""
+    try:
+        invitation = agreement_manager.db.verify_invitation_token(token)
+        if not invitation:
+            return render_template('error.html',
+                message='Invalid or expired invitation link'
+            )
+        
+        return render_template('setup_invitation.html',
+            token=token,
+            email=invitation['email']
+        )
+    except Exception as e:
+        print(f"Error in setup_invitation: {str(e)}")
+        return render_template('error.html',
+            message='Error processing invitation'
+        )
+
+@app.route('/api/users/complete-setup', methods=['POST'])
+def complete_setup():
+    """Complete user setup from invitation"""
+    try:
+        data = request.get_json()
+        token = data['token']
+        name = data['name']
+        password = data['password']
+        
+        # Hash the password
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        
+        success = agreement_manager.db.complete_user_setup(
+            token=token,
+            name=name,
+            password_hash=password_hash
+        )
+        
+        if not success:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid or expired invitation'
+            }), 400
+            
+        return jsonify({
+            'success': True,
+            'message': 'Account setup completed successfully'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 400
+
+@app.route('/dashboard')
+@require_auth
+def dashboard():
+    """Organization dashboard page"""
+    try:
+        org_id = g.user.get('organization_id')
+        if not org_id:
+            return redirect(url_for('home'))
+            
+        organization = agreement_manager.db.get_organization(org_id)
+        if not organization:
+            session.clear()
+            return redirect(url_for('home'))
+        
+        # Get statistics
+        stats = {
+            'total': 0,
+            'pending': 0,
+            'signed': 0,
+            'cancelled': 0,
+            'this_month': 0
+        }
+        
+        # Get recent activities and agreements
+        agreements = agreement_manager.db.get_organization_agreements(org_id) or []
+        recent_activities = []
+        
+        for agreement in agreements[:5]:  # Last 5 agreements
+            status_class = {
+                'pending': 'warning',
+                'signed': 'success',
+                'cancelled': 'danger'
+            }.get(agreement['status'], 'secondary')
+            
+            recent_activities.append({
+                'id': agreement['agreement_id'],
+                'title': agreement['title'],
+                'recipient_email': agreement['recipient_email'],
+                'status': agreement['status'],
+                'status_class': status_class,
+                'date': agreement['created_at']
+            })
+            
+            # Update stats
+            stats['total'] += 1
+            if agreement['status'] == 'pending':
+                stats['pending'] += 1
+            elif agreement['status'] == 'signed':
+                stats['signed'] += 1
+            elif agreement['status'] == 'cancelled':
+                stats['cancelled'] += 1
+                
+            # Check if created this month
+            created_at = datetime.fromisoformat(agreement['created_at'].replace('Z', '+00:00'))
+            if created_at.month == datetime.now().month and created_at.year == datetime.now().year:
+                stats['this_month'] += 1
+        
+        return render_template('organization_dashboard.html',
+                             organization=organization,
+                             stats=stats,
+                             recent_activities=recent_activities,
+                             user_role=g.user.get('role', 'user'))
+    except Exception as e:
+        print(f"Error loading dashboard: {str(e)}")
+        return render_template('error.html', message="Error loading dashboard")
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('home'))
+
+# Add with other initializations
+email_sender = EmailSender()
+
+# Add this right after creating the Flask app, before any routes
+def format_datetime(value):
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        except ValueError:
+            return value
+    return value.strftime('%Y-%m-%d %H:%M:%S')
+
+app.jinja_env.filters['datetime'] = format_datetime
+
+@app.route('/api/organization/settings/email', methods=['POST'])
+@require_auth
+@require_org_auth
+def update_organization_email_settings():
+    """Update organization email settings"""
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['email', 'smtp_password', 'smtp_server', 'smtp_port']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({
+                    'success': False,
+                    'message': f'Missing required field: {field}'
+                }), 400
+        
+        # Validate port number
+        try:
+            smtp_port = int(data['smtp_port'])
+            if smtp_port <= 0 or smtp_port > 65535:
+                raise ValueError()
+        except ValueError:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid SMTP port number'
+            }), 400
+        
+        # Update organization settings
+        updated_org = agreement_manager.db.update_organization_email_settings(
+            org_id=g.user['organization_id'],
+            email_settings={
+                'email': data['email'],
+                'smtp_password': data['smtp_password'],
+                'smtp_server': data['smtp_server'],
+                'smtp_port': smtp_port
+            }
+        )
+        
+        if not updated_org:
+            return jsonify({
+                'success': False,
+                'message': 'Failed to update email settings'
+            }), 500
+        
+        return jsonify({
+            'success': True,
+            'message': 'Email settings updated successfully'
+        })
+        
+    except Exception as e:
+        print(f"Error updating email settings: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 400
+
+@app.route('/api/organization/settings/test-email', methods=['POST'])
+@require_auth
+@require_org_auth
+def test_organization_email():
+    """Send a test email using organization's email settings"""
+    try:
+        data = request.get_json()
+        test_email = data.get('test_email')
+        
+        if not test_email:
+            return jsonify({
+                'success': False,
+                'message': 'Test email address is required'
+            }), 400
+        
+        # Get organization details
+        organization = agreement_manager.db.get_organization(g.user['organization_id'])
+        if not organization:
+            return jsonify({
+                'success': False,
+                'message': 'Organization not found'
+            }), 404
+            
+        # Validate SMTP settings
+        if not organization.get('smtp_server') or not organization.get('smtp_port') or not organization.get('smtp_password'):
+            return jsonify({
+                'success': False,
+                'message': 'Organization email settings are not fully configured'
+            }), 400
+        
+        # Configure email sender with organization's SMTP settings
+        email_sender.configure_smtp(
+            smtp_server=organization['smtp_server'],
+            smtp_port=organization['smtp_port'],
+            smtp_password=organization['smtp_password']
+        )
+        
+        # Send test email
+        success = email_sender.send_email(
+            recipient_email=test_email,
+            subject='Test Email from BioSign',
+            body=f'''
+            <h2>Test Email</h2>
+            <p>This is a test email to verify your email configuration.</p>
+            <p>If you received this email, your email settings are configured correctly.</p>
+            <p>Organization: {organization['name']}</p>
+            <p>Sender Email: {organization['email']}</p>
+            ''',
+            sender_email=organization['email'],
+            is_html=True
+        )
+        
+        if success:
+            return jsonify({
+            'success': True,
+                'message': f'Test email sent successfully to {test_email}'
+        })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Failed to send test email. Please check your email settings.'
+            }), 500
+        
+    except Exception as e:
+        print(f"Error sending test email: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'Error sending test email: {str(e)}'
+        }), 400
+
+@app.route('/api/agreements/<agreement_id>/signed-pdf', methods=['GET'])
+def get_signed_pdf(agreement_id):
+    try:
+        pdf_content = agreement_manager.get_signed_pdf(agreement_id)
+        if not pdf_content:
+            return jsonify({'error': 'Signed PDF not found'}), 404
+            
+        # Check if download is requested
+        download = request.args.get('download', 'false').lower() == 'true'
+        
+        filename = f"signed_agreement_{agreement_id}.pdf"
+        mimetype = 'application/pdf'
+        
+        if download:
+            return send_file(
+                io.BytesIO(pdf_content),
+                mimetype=mimetype,
+                as_attachment=True,
+                download_name=filename
+            )
+        else:
+            # Display in browser
+            return Response(pdf_content, mimetype=mimetype)
+            
+    except Exception as e:
+        print(f"Error retrieving signed PDF: {str(e)}")
+        return jsonify({'error': 'Failed to retrieve signed PDF'}), 500

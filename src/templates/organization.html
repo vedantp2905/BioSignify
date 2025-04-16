@@ -1,0 +1,58 @@
+<!-- src/templates/organization_signup.html -->
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h3>Create Organization Account</h3>
+                </div>
+                <div class="card-body">
+                    <form id="signupForm">
+                        <div class="form-group">
+                            <label for="orgName">Organization Name</label>
+                            <input type="text" class="form-control" id="orgName" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="orgEmail">Organization Email</label>
+                            <input type="email" class="form-control" id="orgEmail" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="adminEmail">Admin Email</label>
+                            <input type="email" class="form-control" id="adminEmail" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Create Organization</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('signupForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const response = await fetch('/api/organizations/signup', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            name: document.getElementById('orgName').value,
+            email: document.getElementById('orgEmail').value,
+            adminEmail: document.getElementById('adminEmail').value
+        })
+    });
+    
+    const data = await response.json();
+    if (data.success) {
+        window.location.href = '/login';
+    } else {
+        alert(data.message);
+    }
+});
+</script>
+{% endblock %}

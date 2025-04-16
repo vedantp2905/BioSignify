@@ -500,17 +500,19 @@ class SupabaseAdapter:
             traceback.print_exc()
             return None
 
-    def get_organization_users(self, org_id: str) -> list:
-        """Get all users in an organization"""
+    def get_organization_users(self, organization_id: str) -> list:
+        """Get all users for an organization"""
         try:
-            response = self.supabase.table('organization_users')\
-                .select('*')\
-                .eq('organization_id', org_id)\
+            response = self.supabase.table('organization_users') \
+                .select('*') \
+                .eq('organization_id', organization_id) \
                 .execute()
+            
             return response.data
+            
         except Exception as e:
             print(f"Error getting organization users: {str(e)}")
-            raise
+            return []
 
     def update_organization(self, org_id: str, data: dict) -> dict:
         """Update organization details"""
@@ -527,73 +529,127 @@ class SupabaseAdapter:
     def create_invitation_token(self, email: str, organization_id: str, token: str) -> str:
         """Create an invitation token for a new user"""
         try:
+            print(f"DEBUG - Creating invitation token for {email} in org {organization_id}")
             expiry = datetime.utcnow() + timedelta(days=7)
             
-            response = self.supabase.table('user_invitations').insert({
+            # Create the invitation record
+            invitation_data = {
                 'email': email,
                 'organization_id': organization_id,
                 'token': token,
                 'expires_at': expiry.isoformat()
-            }).execute()
+            }
+            
+            print(f"DEBUG - Invitation data: {invitation_data}")
+            
+            response = self.supabase.table('user_invitations').insert(invitation_data).execute()
+            
+            print(f"DEBUG - Supabase response: {response.data if hasattr(response, 'data') else 'No data'}")
             
             if not response.data:
-                print("No data returned from invitation token creation")
+                print("DEBUG - No data returned from invitation token creation")
                 return None
             
             return token
+            
         except Exception as e:
             print(f"Error creating invitation token: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return None
 
-    def verify_invitation_token(self, token: str) -> Optional[dict]:
-        """Verify an invitation token and return invitation details"""
+    def verify_invitation_token(self, token: str) -> dict:
+        """Verify an invitation token"""
         try:
-            response = self.supabase.table('user_invitations')\
-                .select('*')\
-                .eq('token', token)\
-                .single()\
+            print(f"Verifying token: {token}")  # Debug log
+            
+            # Get the invitation
+            response = self.supabase.table('user_invitations') \
+                .select('*') \
+                .eq('token', token) \
                 .execute()
+                
+            print(f"Query response: {response.data}")  # Debug log
             
             if not response.data:
+                print("No invitation found with this token")  # Debug log
                 return None
+                
+            # Return the first invitation found
+            return response.data[0]
             
-            invitation = response.data
-            expiry = datetime.fromisoformat(invitation['expires_at'].replace('Z', '+00:00'))
-            
-            if expiry < datetime.utcnow():
-                return None
-            
-            return invitation
         except Exception as e:
             print(f"Error verifying invitation token: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return None
 
-    def complete_user_setup(self, token: str, name: str, password_hash: str) -> bool:
-        """Complete user setup from invitation"""
+    def complete_user_setup(self, token: str, password_hash: str) -> bool:
+        """Complete user setup from invitation token"""
         try:
+            print(f"Starting complete_user_setup with token: {token}")
+            
+            # First get the invitation
             invitation = self.verify_invitation_token(token)
             if not invitation:
+                print("Failed to verify invitation token")
                 return False
+                
+            email = invitation['email']
+            organization_id = invitation['organization_id']
+            print(f"Found invitation for email: {email}")
             
-            # Update user record with name and password
-            self.supabase.table('organization_users')\
-                .update({
-                    'name': name,
-                    'password_hash': password_hash,
-                    'status': 'active'
-                })\
-                .eq('email', invitation['email'])\
+            # First check if user exists
+            user_response = self.supabase.table('organization_users') \
+                .select('*') \
+                .eq('email', email) \
                 .execute()
+                
+            if not user_response.data:
+                # Create new user if doesn't exist
+                print(f"Creating new user record for {email}")
+                create_response = self.supabase.table('organization_users') \
+                    .insert({
+                        'email': email,
+                        'organization_id': organization_id,
+                        'password_hash': password_hash,
+                        'status': 'active',
+                        'role': 'user'
+                    }) \
+                    .execute()
+                    
+                if not create_response.data:
+                    print("Failed to create user record")
+                    return False
+            else:
+                # Update existing user
+                print(f"Updating existing user record for {email}")
+                update_response = self.supabase.table('organization_users') \
+                    .update({
+                        'status': 'active',
+                        'password_hash': password_hash
+                    }) \
+                    .eq('email', email) \
+                    .execute()
+                    
+                if not update_response.data:
+                    print("Failed to update user record")
+                    return False
             
-            # Delete the used invitation
-            self.supabase.table('user_invitations')\
-                .delete()\
-                .eq('token', token)\
+            # Delete the used invitation token
+            delete_response = self.supabase.table('user_invitations') \
+                .delete() \
+                .eq('token', token) \
                 .execute()
+                
+            print(f"Token deletion response: {delete_response.data}")
             
             return True
+            
         except Exception as e:
             print(f"Error completing user setup: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def delete_organization_user(self, user_id: str) -> bool:
@@ -633,3 +689,30 @@ class SupabaseAdapter:
                 result.data[0]['smtp_password'] = self.decrypt_smtp_password(result.data[0]['smtp_password'])
             return result.data[0]
         return None
+
+    def delete_invitation_token(self, token: str) -> bool:
+        """Delete an invitation token"""
+        try:
+            response = self.supabase.table('user_invitations')\
+                .delete()\
+                .eq('token', token)\
+                .execute()
+            return bool(response.data)
+        except Exception as e:
+            print(f"Error deleting invitation token: {str(e)}")
+            return False
+
+    def remove_organization_user(self, organization_id: str, email: str) -> bool:
+        """Remove a user from an organization"""
+        try:
+            response = self.supabase.table('organization_users') \
+                .delete() \
+                .eq('organization_id', organization_id) \
+                .eq('email', email) \
+                .execute()
+            
+            return bool(response.data)
+            
+        except Exception as e:
+            print(f"Error removing organization user: {str(e)}")
+            return False

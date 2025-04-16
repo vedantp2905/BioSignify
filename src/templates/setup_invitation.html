@@ -11,12 +11,6 @@
             <input type="hidden" name="email" value="{{ email }}">
             
             <div>
-                <label for="name" class="block text-sm font-medium text-gray-700">Full Name</label>
-                <input type="text" id="name" name="name" required
-                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
-            </div>
-
-            <div>
                 <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
                 <input type="password" id="password" name="password" required
                     class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
@@ -56,7 +50,6 @@ document.getElementById('setupForm').addEventListener('submit', async (e) => {
                 'X-CSRFToken': form.querySelector('[name="csrf_token"]').value
             },
             body: JSON.stringify({
-                name: form.name.value,
                 password: form.password.value,
                 token: form.token.value,
                 email: form.email.value

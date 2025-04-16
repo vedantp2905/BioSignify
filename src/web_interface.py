@@ -991,19 +991,24 @@ def resend_agreement(agreement_id):
             pdf_content.write(f.read())
         pdf_content.seek(0)
 
-        # Send the email
-        success = agreement_manager.email_sender.send_agreement_email(
+        # First configure the email sender with organization's SMTP settings
+        email_sender.configure_smtp(
+            smtp_server=organization['smtp_server'],
+            smtp_port=organization['smtp_port'],
+            smtp_password=organization['smtp_password']
+        )
+
+        # Then send the email with just the required parameters
+        email_sent = email_sender.send_email(
             recipient_email=agreement['recipient_email'],
             agreement_id=agreement_id,
             pdf_content=pdf_content,
             signing_url=signing_url,
             sender_email=sender_email,
-            smtp_password=smtp_password,
-            smtp_server=smtp_server,
-            smtp_port=smtp_port
+            is_html=True
         )
 
-        if success:
+        if email_sent:
             return jsonify({'message': 'Agreement resent successfully'}), 200
         else:
             return jsonify({'error': 'Failed to resend agreement'}), 500
@@ -1153,20 +1158,35 @@ def organization_users():
         if g.user['role'] != 'admin':
             return render_template('error.html', message="Unauthorized")
             
+        # Get organization details
         organization = agreement_manager.db.get_organization(org_id)
+        
+        # Get all users for this organization
         users = agreement_manager.db.get_organization_users(org_id)
+        
+        print(f"DEBUG - Found {len(users) if users else 0} users for organization {org_id}")
+        print(f"DEBUG - Users data: {users}")
+        
+        # Add debug information to verify template variables
+        print(f"DEBUG - Current user role: {g.user.get('role')}")
+        print(f"DEBUG - Organization: {organization}")
+        
         return render_template('organization_users.html', 
                              organization=organization,
-                             organization_users=users)
+                             organization_users=users,
+                             current_user=g.user)
+                             
     except Exception as e:
+        print(f"Error loading organization users: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return render_template('error.html', message=str(e))
 
 @app.route('/api/organization/users', methods=['POST'])
 @require_auth
 @require_org_auth
-@csrf.exempt  # Add this decorator since we'll handle CSRF manually
+@csrf.exempt
 def add_organization_user():
-    """Add a new user to the organization"""
     try:
         if g.user['role'] != 'admin':
             return jsonify({'success': False, 'message': 'Unauthorized'}), 403
@@ -1175,57 +1195,69 @@ def add_organization_user():
         email = data['email']
         role = data.get('role', 'user')
         
-        # Create user with pending status
-        try:
-            user = agreement_manager.db.add_organization_user(
-                organization_id=g.user['organization_id'],
-                email=email,
-                role=role,
-                status='pending'  # This will now be accepted by the method
-            )
-            
-            if not user:
-                raise Exception("Failed to create user record")
-                
-            # Create invitation token
-            token = agreement_manager.db.create_invitation_token(email, g.user['organization_id'])
-            
-            # Generate setup URL
-            setup_url = url_for('setup_invitation', token=token, _external=True)
-            
-            # Send invitation email using EmailSender
-            email_body = render_template('email/invitation.html',
-                setup_url=setup_url,
-                organization_name=g.user.get('organization_name', 'BioSign')
-            )
-            
-            # Send invitation email
-            email_sent = email_sender.send_email(
-                recipient_email=email,
-                subject='Complete your BioSign account setup',
-                body=email_body,
-                is_html=True
-            )
-            
-            if not email_sent:
-                raise Exception("Failed to send invitation email")
-            
-            return jsonify({
-                'success': True,
-                'message': f'Invitation sent to {email}'
-            })
-            
-        except Exception as e:
-            print(f"Error in user creation process: {str(e)}")
+        # Get organization details
+        organization = agreement_manager.db.get_organization(g.user['organization_id'])
+        if not organization:
             return jsonify({
                 'success': False,
-                'message': f'Failed to create user: {str(e)}'
+                'message': 'Organization not found'
+            }), 404
+
+        # Generate a simple numeric token instead of using datetime
+        token = str(secrets.randbelow(1000000)).zfill(6)  # 6-digit number
+        
+        # Create invitation token with the numeric code
+        invitation_token = agreement_manager.db.create_invitation_token(
+            email=email,
+            organization_id=g.user['organization_id'],
+            token=token  # Using the simple numeric token
+        )
+        
+        if not invitation_token:
+            return jsonify({
+                'success': False,
+                'message': 'Failed to create invitation token'
+            }), 400
+
+        # Configure email sender
+        email_sender.configure_smtp(
+            smtp_server=organization['smtp_server'],
+            smtp_port=organization['smtp_port'],
+            smtp_password=organization['smtp_password']
+        )
+        
+        # Generate setup URL with the numeric token
+        setup_url = url_for('setup_invitation', token=token, _external=True)
+        
+        # Send invitation email
+        email_body = render_template('email/invitation.html',
+            setup_url=setup_url,
+            organization_name=organization['name']
+        )
+        
+        email_sent = email_sender.send_email(
+            recipient_email=email,
+            subject=f'Your {organization["name"]} Invitation Code: {token}',
+            body=email_body,
+            sender_email=organization['email'],
+            is_html=True
+        )
+        
+        if not email_sent:
+            return jsonify({
+                'success': False,
+                'message': 'Failed to send invitation email'
             }), 400
             
-    except Exception as e:
-        print(f"Error adding user: {str(e)}")
         return jsonify({
-                'success': False,
+            'success': True,
+            'message': f'Invitation sent to {email}'
+        })
+        
+    except Exception as e:
+        print(f"Error in user creation process: {str(e)}")
+        return jsonify({
+            'success': False,
             'message': str(e)
         }), 400
 
@@ -1233,10 +1265,17 @@ def add_organization_user():
 def setup_invitation(token):
     """Handle invitation setup page"""
     try:
+        # Before verifying token, ensure we're using timezone-aware comparison
         invitation = agreement_manager.db.verify_invitation_token(token)
         if not invitation:
             return render_template('error.html',
                 message='Invalid or expired invitation link'
+            )
+        
+        # Ensure we have the email from the invitation
+        if not invitation.get('email'):
+            return render_template('error.html',
+                message='Invalid invitation data'
             )
         
         return render_template('setup_invitation.html',
@@ -1246,7 +1285,7 @@ def setup_invitation(token):
     except Exception as e:
         print(f"Error in setup_invitation: {str(e)}")
         return render_template('error.html',
-            message='Error processing invitation'
+            message='Error processing invitation. Please contact support.'
         )
 
 @app.route('/api/users/complete-setup', methods=['POST'])
@@ -1254,31 +1293,45 @@ def complete_setup():
     """Complete user setup from invitation"""
     try:
         data = request.get_json()
+        print(f"Received setup data: {data}")  # Debug log
+        
+        if not data.get('token') or not data.get('password'):
+            return jsonify({
+                'success': False,
+                'message': 'Token and password are required'
+            }), 400
+
         token = data['token']
-        name = data['name']
         password = data['password']
+        
+        print(f"Processing setup for token: {token}")  # Debug log
         
         # Hash the password
         password_hash = hashlib.sha256(password.encode()).hexdigest()
         
+        # Complete setup
         success = agreement_manager.db.complete_user_setup(
             token=token,
-            name=name,
             password_hash=password_hash
         )
         
         if not success:
+            print("Setup completion failed")  # Debug log
             return jsonify({
                 'success': False,
                 'message': 'Invalid or expired invitation'
             }), 400
             
+        print("Setup completed successfully")  # Debug log
         return jsonify({
             'success': True,
             'message': 'Account setup completed successfully'
         })
         
     except Exception as e:
+        print(f"Error completing user setup: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'message': str(e)
@@ -1412,7 +1465,7 @@ def update_organization_email_settings():
             return jsonify({
                 'success': False,
                 'message': 'Failed to update email settings'
-            }), 500
+        }), 500 
         
         return jsonify({
             'success': True,
@@ -1455,8 +1508,8 @@ def test_organization_email():
                 'success': False,
                 'message': 'Organization email settings are not fully configured'
             }), 400
-        
-        # Configure email sender with organization's SMTP settings
+            
+        # First configure the email sender with organization's SMTP settings
         email_sender.configure_smtp(
             smtp_server=organization['smtp_server'],
             smtp_port=organization['smtp_port'],
@@ -1523,3 +1576,43 @@ def get_signed_pdf(agreement_id):
     except Exception as e:
         print(f"Error retrieving signed PDF: {str(e)}")
         return jsonify({'error': 'Failed to retrieve signed PDF'}), 500
+
+@app.route('/api/organization/users/<email>', methods=['DELETE'])
+@require_auth
+@require_org_auth
+def remove_organization_user(email):
+    """Remove a user from the organization"""
+    try:
+        if g.user['role'] != 'admin':
+            return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+            
+        # Don't allow removing self
+        if email == g.user['email']:
+            return jsonify({
+                'success': False,
+                'message': 'Cannot remove yourself'
+            }), 400
+            
+        # Remove user
+        success = agreement_manager.db.remove_organization_user(
+            organization_id=g.user['organization_id'],
+            email=email
+        )
+        
+        if success:
+            return jsonify({
+            'success': True,
+                'message': f'User {email} removed successfully'
+        })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Failed to remove user'
+            }), 400
+        
+    except Exception as e:
+        print(f"Error removing user: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 400

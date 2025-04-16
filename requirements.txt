@@ -2,7 +2,7 @@ mtcnn==1.0.0
 keras-facenet==0.3.2
 keras==3.8.0
 opencv-python==4.11.0.86
-numpy==2.0.2
+numpy
 scipy==1.14.1
 qdrant-client==1.13.3
 pytest==8.3.5
